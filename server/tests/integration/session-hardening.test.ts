@@ -224,7 +224,9 @@ describe('Session hardening', () => {
     });
 
     it('rejects a callback whose cookie belongs to a different flow start', async () => {
-      stubGoogleTokenEndpoint({});
+      // A working Google identity, so only the binding check can stop the login.
+      const { user } = await seedUser('g@org.local', 'google-sub-1');
+      stubGoogleTokenEndpoint({ id_token: fakeIdToken({ sub: 'google-sub-1', email: user.email, email_verified: true }) });
       const attackerStart = await request('/api/auth/google');
       const attackerState = new URL(attackerStart.headers.get('location')!).searchParams.get('state')!;
       const victimStart = await request('/api/auth/google');
