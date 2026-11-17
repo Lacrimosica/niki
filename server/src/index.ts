@@ -95,7 +95,6 @@ app.get('/health', (c) => {
   return c.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    environment: c.env.CORS_ORIGIN ? 'production' : 'development'
   });
 });
 
