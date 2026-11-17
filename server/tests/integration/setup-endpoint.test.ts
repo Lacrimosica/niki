@@ -64,7 +64,7 @@ describe('Setup Endpoint — single_org Mode', () => {
     // Attempt duplicate
     try {
       await createTestOrganization({ slug: 'unique-slug' });
-      expect.fail('Should have thrown UNIQUE constraint error');
+      expect.fail('write unexpectedly succeeded');
     } catch (err) {
       expect((err as Error).message).toMatch(/UNIQUE|constraint/i);
     }
