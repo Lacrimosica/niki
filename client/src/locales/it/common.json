@@ -552,6 +552,7 @@
     "email": "Email",
     "password": "Password",
     "invalidCredentials": "Email o password non validi.",
+    "tooManyRequests": "Troppi tentativi. Riprova più tardi.",
     "loginPage": {
       "signInWithGoogle": "Accedi con Google",
       "or": "oppure",

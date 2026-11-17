@@ -20,12 +20,34 @@ import { getPermissionsForRole, sessionPermissions } from '../lib/session-permis
 import { hashPassword, verifyPassword } from '../lib/auth';
 import { decodeGoogleIdToken, rejectGoogleIdentity } from '../lib/google-identity';
 import { rejectGrant } from '../lib/roles';
+import { RATE_LIMITS, clientIp, consumeRateLimit, emailBucketId, resetRateLimit, tooManyAttempts } from '../lib/rate-limit';
 
 // A valid "salt:hash" that no password matches; verified against when the user is unknown.
 const DUMMY_PASSWORD_HASH = 'AAAAAAAAAAAAAAAAAAAAAA==:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 
+// One Retry-After for both login buckets: the real per-bucket wait (at most a
+// minute per IP, up to 15 per email) would reveal which bucket tripped, and so
+// that a given email is being targeted.
+const LOGIN_RETRY_AFTER_SECONDS = RATE_LIMITS.loginPerEmail.windowMs / 1000;
+
 authRouter.post('/login', async (c) => {
   const { email, password, slug } = await c.req.json() as { email: string; password: string; slug?: string };
+
+  // Checked before the password so a locked-out caller learns nothing, even with
+  // the right password. The per-IP bucket slows spraying from one source; the
+  // per-email bucket slows credential stuffing spread across many IPs. Unknown
+  // emails get a bucket too, so a 429 doesn't reveal whether an account exists.
+  const ip = clientIp(c);
+  if (ip) {
+    const ipLimit = await consumeRateLimit(c.env.DB, RATE_LIMITS.loginPerIp, ip);
+    if (!ipLimit.allowed) return tooManyAttempts(c, LOGIN_RETRY_AFTER_SECONDS);
+  }
+  const emailBucket = typeof email === 'string' && email.trim() ? await emailBucketId(email) : null;
+  if (emailBucket) {
+    const emailLimit = await consumeRateLimit(c.env.DB, RATE_LIMITS.loginPerEmail, emailBucket);
+    if (!emailLimit.allowed) return tooManyAttempts(c, LOGIN_RETRY_AFTER_SECONDS);
+  }
+
   const db = drizzle(c.env.DB);
   const user = await db.select().from(userSchema).where(eq(userSchema.email, email)).get();
 
@@ -34,6 +56,9 @@ authRouter.post('/login', async (c) => {
   if (!user || !user.password || !passwordOk) {
     return c.json({ error: 'Invalid credentials' }, 401);
   }
+
+  // Only failures should count toward the account lockout window.
+  if (emailBucket) await resetRateLimit(c.env.DB, RATE_LIMITS.loginPerEmail, emailBucket);
 
   // Determine which organization to authenticate for
   // Priority: 1) slug param, 2) email domain match, 3) first org user belongs to

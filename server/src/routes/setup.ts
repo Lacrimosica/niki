@@ -5,6 +5,7 @@ import { eq, count } from 'drizzle-orm';
 import { hashPassword, verifyPassword } from '../lib/auth';
 import { parseDeploymentMode, canCreateOrg, type DeploymentMode, getOrganizationSettingId } from '../lib/deployment-mode';
 import { organization, organizationUser, user, organizationSetting, invite, auditEvent } from '../db/schema';
+import { RATE_LIMITS, clientIp, consumeRateLimit, tooManyAttempts } from '../lib/rate-limit';
 
 type Bindings = {
   DB: D1Database;
@@ -40,6 +41,12 @@ setupRouter.get('/status', async (c) => {
 // Used for CSRF protection
 setupRouter.get('/token', async (c) => {
   try {
+    const ip = clientIp(c);
+    if (ip) {
+      const limit = await consumeRateLimit(c.env.DB, RATE_LIMITS.setupTokenPerIp, ip);
+      if (!limit.allowed) return tooManyAttempts(c, limit.retryAfterSeconds);
+    }
+
     const deploymentMode = parseDeploymentMode(c.env.DEPLOYMENT_MODE);
     if (deploymentMode === 'closed') {
       return c.json({ error: 'Organization creation is disabled.' }, 423);
@@ -70,6 +77,13 @@ setupRouter.get('/token', async (c) => {
 // Create an organization and admin user. Guarded by deployment mode and rate limiting.
 setupRouter.post('/', async (c) => {
   try {
+    // Counted before any validation so failed and malformed attempts use up the budget too.
+    const ip = clientIp(c);
+    if (ip) {
+      const limit = await consumeRateLimit(c.env.DB, RATE_LIMITS.setupPerIp, ip);
+      if (!limit.allowed) return tooManyAttempts(c, limit.retryAfterSeconds);
+    }
+
     const db = drizzle(c.env.DB);
     const JWT_SECRET = c.env.JWT_SECRET;
 
@@ -95,9 +109,6 @@ setupRouter.post('/', async (c) => {
       console.error('Setup token verification failed:', err);
       return c.json({ error: 'Invalid or expired setup token' }, 401);
     }
-
-    // ─ Rate limiting disabled for development ─
-    const clientIp = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
 
     // ─ Deployment mode check ─
     const deploymentMode = parseDeploymentMode(c.env.DEPLOYMENT_MODE);
@@ -337,7 +348,7 @@ setupRouter.post('/', async (c) => {
         actorId: userId,
         orgId: orgId,
         payload: JSON.stringify({ orgName, shortName, slug, mode: deploymentMode }),
-        ip: clientIp,
+        ip: ip ?? 'unknown',
         createdAt: now
       });
     } catch (err) {

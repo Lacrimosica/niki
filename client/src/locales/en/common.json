@@ -570,6 +570,7 @@
     "email": "Email",
     "password": "Password",
     "invalidCredentials": "Invalid email or password.",
+    "tooManyRequests": "Too many attempts. Please try again later.",
     "loginPage": {
       "signInWithGoogle": "Sign in with Google",
       "or": "or",

@@ -436,7 +436,7 @@ The database went through a systematic enum-to-lookup refactor:
 - ✅ Password hashing with PBKDF2-SHA256 (100,000 iterations), constant-time comparison
 - ✅ Session, membership, role and permissions validated on every request
 - ✅ Setup requires a short-lived setup token and writes the new organization atomically
-- ⚠️ No rate limiting on login or setup yet
+- ✅ Login and setup are rate limited per IP and, for login, per email (generic 429 with Retry-After)
 
 ### Data Protection
 - ✅ HTTPS only (Cloudflare enforces)
@@ -461,7 +461,8 @@ rather than in a public issue.
 
 - [ ] Real-time collaboration on assemblies (WebSockets)
 - [ ] Email notifications for pending documents
-- [ ] Rate limiting on login and setup
+- [x] Rate limiting on login and setup
+- [ ] Two-factor authentication (OTP/TOTP) and email verification
 - [ ] Advanced reporting & analytics
 - [ ] Mobile app (React Native)
 - [ ] SAML/LDAP SSO for enterprise deployments
