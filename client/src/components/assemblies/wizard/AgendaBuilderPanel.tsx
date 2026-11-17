@@ -7,6 +7,7 @@ interface AssemblyForm {
     number: number;
     title: string;
     workflowType: string;
+    memberNames?: string[];
   }>;
 }
 
@@ -16,11 +17,13 @@ interface AgendaBuilderPanelProps {
   setNewAgendaTitle: (title: string) => void;
   newAgendaWorkflow: string;
   setNewAgendaWorkflow: (workflow: string) => void;
-  newAgendaMembers: string[];
-  setNewAgendaMembers: (members: string[]) => void;
+  /** Selected person ids for the item being added. */
+  newAgendaMemberIds: string[];
+  setNewAgendaMemberIds: (memberIds: string[]) => void;
   addAgendaItem: (title: string, workflowType: string) => void;
   removeAgendaItem: (index: number) => void;
   applyCurrentTemplate: () => void;
+  /** Candidates for the selected workflow (they differ per workflow). */
   memberCandidates: MemberCandidate[];
   membersLoading: boolean;
 }
@@ -31,8 +34,8 @@ export const AgendaBuilderPanel = ({
   setNewAgendaTitle,
   newAgendaWorkflow,
   setNewAgendaWorkflow,
-  newAgendaMembers,
-  setNewAgendaMembers,
+  newAgendaMemberIds,
+  setNewAgendaMemberIds,
   addAgendaItem,
   removeAgendaItem,
   applyCurrentTemplate,
@@ -70,6 +73,9 @@ export const AgendaBuilderPanel = ({
                 {item.workflowType && (
                   <p className="text-[10px] text-purple-400 font-mono leading-none mt-1">{item.workflowType}</p>
                 )}
+                {item.memberNames && item.memberNames.length > 0 && (
+                  <p className="text-[10px] text-slate-500 truncate mt-1">{item.memberNames.join(', ')}</p>
+                )}
               </div>
               <button
                 type="button"
@@ -99,8 +105,8 @@ export const AgendaBuilderPanel = ({
               <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5 block">Seleziona Soci</label>
               <MemberPickerField
                 candidates={memberCandidates}
-                selected={newAgendaMembers}
-                onChange={setNewAgendaMembers}
+                selected={newAgendaMemberIds}
+                onChange={setNewAgendaMemberIds}
                 loading={membersLoading}
                 placeholder="Cerca soci..."
               />

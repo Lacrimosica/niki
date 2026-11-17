@@ -4,7 +4,9 @@ import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import { X, Check, Loader2, Plus } from 'lucide-react';
 import { useAssemblyForm } from '../../hooks/useAssemblyForm';
-import { useBoardGenerations } from '../../hooks/useBoardGenerations';
+import { useWorkflowCandidates } from '../../hooks/useWorkflowCandidates';
+import { resolveMemberNames } from '../../lib/agenda-members';
+import { useBoardGenerations, type BoardMemberWithDetails } from '../../hooks/useBoardGenerations';
 import { useAddresses } from '../../hooks/useSettings';
 import { normalizeRole } from '../../lib/board-roles';
 import type { MemberCandidate } from '../SingleMemberPicker';
@@ -41,23 +43,25 @@ export const CreateAssemblyWizard = ({
     setNewAgendaTitle,
     newAgendaWorkflow,
     setNewAgendaWorkflow,
-    newAgendaMembers,
-    setNewAgendaMembers,
+    newAgendaMemberIds,
+    setNewAgendaMemberIds,
     addAgendaItem,
     removeAgendaItem,
     applyCurrentTemplate,
     computeConvocationDate,
   } = useAssemblyForm();
+  const { candidatesFor, loadingFor } = useWorkflowCandidates(isOpen ? [newAgendaWorkflow] : []);
+  const agendaCandidates = candidatesFor(newAgendaWorkflow);
 
   const [creating, setCreating] = useState(false);
-  const [boardMembers, setBoardMembers] = useState<Record<string, any[]>>({});
+  const [boardMembers, setBoardMembers] = useState<Record<string, BoardMemberWithDetails[]>>({});
   const fetchedRef = useRef(false);
 
   useEffect(() => {
     if (!isOpen || generations.length === 0 || fetchedRef.current) return;
 
     const fetchBoardMembers = async () => {
-      const membersByGen: Record<string, any[]> = {};
+      const membersByGen: Record<string, BoardMemberWithDetails[]> = {};
       for (const gen of generations) {
         try {
           const members = await getMembers(gen.id);
@@ -156,6 +160,7 @@ export const CreateAssemblyWizard = ({
             number: item.number,
             title: item.title,
             workflowType: item.workflowType || null,
+            memberIds: item.memberIds ?? [],
           });
         }
       }
@@ -233,13 +238,14 @@ export const CreateAssemblyWizard = ({
               setNewAgendaTitle={setNewAgendaTitle}
               newAgendaWorkflow={newAgendaWorkflow}
               setNewAgendaWorkflow={setNewAgendaWorkflow}
-              newAgendaMembers={newAgendaMembers}
-              setNewAgendaMembers={setNewAgendaMembers}
+              newAgendaMemberIds={newAgendaMemberIds}
+              setNewAgendaMemberIds={(ids) =>
+                setNewAgendaMemberIds(ids, resolveMemberNames(ids, [], agendaCandidates).map((m) => m.name))}
               addAgendaItem={addAgendaItem}
               removeAgendaItem={removeAgendaItem}
               applyCurrentTemplate={applyCurrentTemplate}
-              memberCandidates={memberCandidates}
-              membersLoading={membersLoading}
+              memberCandidates={agendaCandidates}
+              membersLoading={loadingFor(newAgendaWorkflow)}
             />
           </div>
         </div>
