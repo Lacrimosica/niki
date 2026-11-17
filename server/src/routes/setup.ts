@@ -3,6 +3,7 @@ import { sign, verify } from 'hono/jwt';
 import { drizzle } from 'drizzle-orm/d1';
 import { and, eq, count, gt, isNull } from 'drizzle-orm';
 import { hashPassword, verifyPassword } from '../lib/auth';
+import { issueSessionToken } from '../lib/session-token';
 import { parseDeploymentMode, canCreateOrg, type DeploymentMode, getOrganizationSettingId } from '../lib/deployment-mode';
 import { organization, organizationUser, user, organizationSetting, invite, auditEvent } from '../db/schema';
 import { RATE_LIMITS, clientIp, consumeRateLimit, tooManyAttempts } from '../lib/rate-limit';
@@ -388,16 +389,12 @@ setupRouter.post('/', async (c) => {
     }
 
     // ─ Create JWT for immediate login ─
-    const jwtPayload = {
-      sub: userId,
-      email: adminEmail,
-      orgId: orgId,
-      role: 'core_admin',
-      permissions: coreAdminPermissions,
-      exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 // 24 hours
-    };
-
-    const token = await sign(jwtPayload, JWT_SECRET);
+    // The admin user was just created, so its token_version is the column default 0.
+    const token = await issueSessionToken(
+      JWT_SECRET,
+      { sub: userId, email: adminEmail, orgId, role: 'core_admin', permissions: coreAdminPermissions },
+      0,
+    );
 
     return c.json({
       token,

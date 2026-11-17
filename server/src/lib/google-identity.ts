@@ -38,3 +38,17 @@ export function rejectGoogleIdentity(
   }
   return null;
 }
+
+/**
+ * Whether a Google identity (such as the grantor of a Drive authorization) is the
+ * account the local user signs in with: the linked Google ID when one exists,
+ * otherwise a verified email equal to the account's email.
+ */
+export function isSameGoogleAccount(
+  claims: GoogleIdTokenClaims,
+  localUser: { email: string; googleId: string | null },
+): boolean {
+  if (localUser.googleId) return claims.sub === localUser.googleId;
+  const verified = claims.email_verified === true || claims.email_verified === 'true';
+  return verified && claims.email?.toLowerCase() === localUser.email.toLowerCase();
+}

@@ -218,11 +218,13 @@ export const useModalityOptions = (enabled: boolean) => {
   return { options, loading, refresh, create, update, remove };
 };
 
-export const changePassword = async (currentPassword: string, newPassword: string) => {
-  await axios.post(`${API_BASE_URL}/settings/change-password`, {
+/** Returns the re-issued session token: the change revokes every earlier one. */
+export const changePassword = async (currentPassword: string, newPassword: string): Promise<string | undefined> => {
+  const response = await axios.post<{ success: boolean; token?: string }>(`${API_BASE_URL}/settings/change-password`, {
     currentPassword,
     newPassword,
   });
+  return response.data.token;
 };
 
 export const resetUserPassword = async (userId: string, newPassword: string) => {

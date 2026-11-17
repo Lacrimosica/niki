@@ -9,8 +9,16 @@ export default function SetPasswordPage() {
   const navigate = useNavigate();
   const { login, isAuthenticated } = useAuth();
 
-  const token = searchParams.get('token') || '';
+  // Delivered in the fragment so it stays out of server logs and Referer headers;
+  // read once, then removed from the address bar and history.
+  const [token] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('token') || '');
   const isFirst = searchParams.get('first') === '1';
+
+  useEffect(() => {
+    if (window.location.hash) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  }, []);
 
   const [passwordSetComplete, setPasswordSetComplete] = useState(false);
 

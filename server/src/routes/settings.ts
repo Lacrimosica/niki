@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import { drizzle } from 'drizzle-orm/d1';
-import { and, eq, ne, isNotNull, isNull } from 'drizzle-orm';
+import { and, eq, ne, isNotNull, isNull, sql } from 'drizzle-orm';
 import { organizationSetting, user, organizationAddress, convocationModalityOption, userSetting, organizationUser, organization } from '../db/schema';
 import { desc } from 'drizzle-orm';
 import { hashPassword, verifyPassword } from '../lib/auth';
 import { rejectGrant, canActOn } from '../lib/roles';
+import { issueSessionToken } from '../lib/session-token';
 
 type Bindings = {
   DB: D1Database;
@@ -392,8 +393,11 @@ settingsRouter.post('/users/:id/reset-password', async (c) => {
     return c.json({ error: 'User not found in this organization' }, 404);
   }
 
+  // Bumping token_version signs the user out everywhere, so whoever held the old
+  // password (or a token obtained with it) loses access immediately.
   await db.update(user).set({
     password: await hashPassword(newPassword),
+    tokenVersion: sql`${user.tokenVersion} + 1`,
     updatedAt: new Date().toISOString(),
   }).where(eq(user.id, id)).run();
 
@@ -456,12 +460,32 @@ settingsRouter.post('/change-password', async (c) => {
     return c.json({ error: 'Current password is invalid' }, 400);
   }
 
-  await db.update(user).set({
+  // Revoke every other session, then hand this one a fresh token so the user who
+  // just changed their password stays signed in here.
+  const updated = await db.update(user).set({
     password: await hashPassword(newPassword),
+    tokenVersion: sql`${user.tokenVersion} + 1`,
     updatedAt: new Date().toISOString(),
-  }).where(eq(user.id, currentUser.id)).run();
+  }).where(eq(user.id, currentUser.id))
+    .returning({ tokenVersion: user.tokenVersion })
+    .get();
+  if (!updated) {
+    return c.json({ error: 'User not found' }, 404);
+  }
 
-  return c.json({ success: true });
+  const token = await issueSessionToken(
+    c.env.JWT_SECRET,
+    {
+      sub: payload.sub,
+      email: currentUser.email,
+      orgId: payload.orgId,
+      role: payload.role,
+      permissions: payload.permissions ?? [],
+    },
+    updated.tokenVersion,
+  );
+
+  return c.json({ success: true, token });
 });
 
 // ─── Sede legale (org address history) ────────────────────────────────────────

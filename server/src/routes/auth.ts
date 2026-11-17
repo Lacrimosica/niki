@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import { drizzle } from 'drizzle-orm/d1';
 import { user as userSchema, organizationSetting as organizationSettingSchema, organization, organizationUser, invite } from '../db/schema';
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 
 type Bindings = {
   DB: D1Database;
@@ -20,10 +20,12 @@ const authRouter = new Hono<{ Bindings: Bindings }>();
 import { getPermissionsForRole, sessionPermissions } from '../lib/session-permissions';
 
 import { hashPassword, verifyPassword } from '../lib/auth';
-import { decodeGoogleIdToken, rejectGoogleIdentity } from '../lib/google-identity';
+import { decodeGoogleIdToken, isSameGoogleAccount, rejectGoogleIdentity } from '../lib/google-identity';
 import { rejectGrant } from '../lib/roles';
 import { RATE_LIMITS, clientIp, consumeRateLimit, emailBucketId, resetRateLimit, tooManyAttempts } from '../lib/rate-limit';
 import { isPlatformAdmin } from '../lib/deployment-mode';
+import { authenticateBearer, issueSessionToken } from '../lib/session-token';
+import { startOAuthBinding, verifyOAuthBinding } from '../lib/oauth-state';
 
 // A valid "salt:hash" that no password matches; verified against when the user is unknown.
 const DUMMY_PASSWORD_HASH = 'AAAAAAAAAAAAAAAAAAAAAA==:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
@@ -110,20 +112,15 @@ authRouter.post('/login', async (c) => {
 
   const permissions = sessionPermissions(orgUser);
 
-  const payload = {
-    sub: user.id,
-    email: user.email,
-    orgId: org.id,
-    role: orgUser.role,
-    permissions,
-    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 // 24 hours
-  };
-
   if (!c.env.JWT_SECRET) {
     return c.json({ error: 'Server authentication misconfigured' }, 500);
   }
 
-  const token = await sign(payload, c.env.JWT_SECRET);
+  const token = await issueSessionToken(
+    c.env.JWT_SECRET,
+    { sub: user.id, email: user.email, orgId: org.id, role: orgUser.role, permissions },
+    user.tokenVersion,
+  );
 
   return c.json({
     token,
@@ -147,11 +144,13 @@ authRouter.get('/google', async (c) => {
   }
 
   const inviteToken = c.req.query('inviteToken');
+  const nonceHash = await startOAuthBinding(c, 'login');
 
   const state = await sign(
     {
       type: 'login',
       inviteToken: inviteToken || null,
+      nh: nonceHash,
       exp: Math.floor(Date.now() / 1000) + 600
     },
     JWT_SECRET,
@@ -181,9 +180,12 @@ authRouter.get('/google/callback', async (c) => {
 
   try {
     // Verify state is a valid signed JWT we issued
-    const statePayload = await verify(state, JWT_SECRET, 'HS256') as { type?: string; inviteToken?: string };
+    const statePayload = await verify(state, JWT_SECRET, 'HS256') as { type?: string; inviteToken?: string; nh?: string };
     // Every token type shares JWT_SECRET, so reject anything that isn't a login state.
     if (statePayload.type !== 'login') throw new Error('Invalid state');
+    if (!(await verifyOAuthBinding(c, 'login', statePayload.nh))) {
+      throw new Error('Login session mismatch. Please start the sign-in again from this browser.');
+    }
     const inviteToken = statePayload.inviteToken;
 
     // Exchange authorization code for tokens
@@ -394,8 +396,9 @@ authRouter.get('/google/callback', async (c) => {
         },
         JWT_SECRET,
       );
+      // Fragment, not query: fragments are never sent to servers or in Referer headers.
       return c.redirect(
-        `${appUrl}/set-password?token=${encodeURIComponent(setPasswordToken)}`,
+        `${appUrl}/set-password#token=${encodeURIComponent(setPasswordToken)}`,
       );
     }
 
@@ -448,20 +451,17 @@ authRouter.get('/google/callback', async (c) => {
 
     const permissions = sessionPermissions(orgUser);
 
-    const jwtPayload = {
-      sub: existingUser.id,
-      email: existingUser.email,
-      orgId: orgRecord.id,
-      role: orgUser.role,
-      permissions,
-      exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24,
-    };
-
-    const token = await sign(jwtPayload, JWT_SECRET);
+    const token = await issueSessionToken(
+      JWT_SECRET,
+      { sub: existingUser.id, email: existingUser.email, orgId: orgRecord.id, role: orgUser.role, permissions },
+      existingUser.tokenVersion,
+    );
     const userOut = { id: existingUser.id, email: existingUser.email, orgId: orgRecord.id, role: orgUser.role, permissions };
 
+    // Fragment, not query: the session token must not reach server logs, browser-sent
+    // Referer headers or the frontend host. The client strips it from history on read.
     return c.redirect(
-      `${appUrl}/auth/callback?token=${encodeURIComponent(token)}&user=${encodeURIComponent(JSON.stringify(userOut))}`,
+      `${appUrl}/auth/callback#token=${encodeURIComponent(token)}&user=${encodeURIComponent(JSON.stringify(userOut))}`,
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Authentication failed';
@@ -501,13 +501,21 @@ authRouter.post('/set-password', async (c) => {
       return c.json({ error: 'Utente non trovato.' }, 404);
     }
 
-    // Hash and update password
+    // Hash and update password; bumping token_version revokes any earlier sessions.
     const passwordHash = await hashPassword(password);
-    await db
+    const updated = await db
       .update(userSchema)
-      .set({ password: passwordHash, updatedAt: new Date().toISOString() })
+      .set({
+        password: passwordHash,
+        tokenVersion: sql`${userSchema.tokenVersion} + 1`,
+        updatedAt: new Date().toISOString(),
+      })
       .where(eq(userSchema.id, user.id))
-      .run();
+      .returning({ tokenVersion: userSchema.tokenVersion })
+      .get();
+    if (!updated) {
+      return c.json({ error: 'Utente non trovato.' }, 404);
+    }
 
     // Fetch organization_user to get role and org
     const orgUser = await db.select().from(organizationUser)
@@ -528,16 +536,11 @@ authRouter.post('/set-password', async (c) => {
 
     const permissions = sessionPermissions(orgUser);
 
-    const jwtPayload = {
-      sub: user.id,
-      email: user.email,
-      orgId: orgRecord.id,
-      role: orgUser.role,
-      permissions,
-      exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24,
-    };
-
-    const jwtToken = await sign(jwtPayload, c.env.JWT_SECRET);
+    const jwtToken = await issueSessionToken(
+      c.env.JWT_SECRET,
+      { sub: user.id, email: user.email, orgId: orgRecord.id, role: orgUser.role, permissions },
+      updated.tokenVersion,
+    );
 
     return c.json({
       token: jwtToken,
@@ -549,9 +552,67 @@ authRouter.post('/set-password', async (c) => {
   }
 });
 
+// ─── Logout ───────────────────────────────────────────────────────────────────
+
+// POST /api/auth/logout — revoke the caller's sessions server-side.
+// token_version is per user, so this ends the user's sessions on every device.
+authRouter.post('/logout', async (c) => {
+  const session = await authenticateBearer(c.req.header('Authorization'), c.env.DB, c.env.JWT_SECRET);
+  // An invalid or already revoked token has nothing left to revoke; the client
+  // clears its copy regardless, so report success instead of an error.
+  if (session) {
+    await drizzle(c.env.DB)
+      .update(userSchema)
+      .set({ tokenVersion: sql`${userSchema.tokenVersion} + 1` })
+      // Only bump from the version this token carries, so a replayed token from an
+      // earlier session cannot keep logging the user out.
+      .where(and(eq(userSchema.id, session.sub), eq(userSchema.tokenVersion, session.tv)))
+      .run();
+  }
+  return c.body(null, 204);
+});
+
 // ─── Google OAuth — Drive (incremental auth) ──────────────────────────────────
-// Note: callback is public (no JWT), but uses signed state token to identify user.
-// The "get Drive auth URL" endpoint is intentionally in documents.ts where JWT is enforced.
+// documents.ts (JWT-protected) issues a short-lived start ticket. The browser then
+// navigates to /google/drive/start on this origin, which sets the state-binding
+// cookie; that cookie could not be set from the cross-site XHR that fetched the URL.
+
+// GET /api/auth/google/drive/start?ticket=... — bind the browser and redirect to Google
+authRouter.get('/google/drive/start', async (c) => {
+  const { GOOGLE_CLIENT_ID, GOOGLE_REDIRECT_BASE_URL, APP_URL, JWT_SECRET } = c.env;
+  const appUrl = APP_URL ?? 'http://localhost:5173';
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_REDIRECT_BASE_URL) {
+    return c.json({ error: 'Google OAuth not configured' }, 503);
+  }
+
+  let userId: string;
+  try {
+    const ticket = await verify(c.req.query('ticket') ?? '', JWT_SECRET, 'HS256') as { type?: string; userId?: string };
+    if (ticket.type !== 'drive_start' || !ticket.userId) throw new Error('Invalid ticket');
+    userId = ticket.userId;
+  } catch {
+    return c.redirect(`${appUrl}/auth/drive-callback?error=${encodeURIComponent('Invalid or expired Drive authorization link')}`);
+  }
+
+  const nonceHash = await startOAuthBinding(c, 'drive');
+  const state = await sign(
+    { type: 'drive', userId, nh: nonceHash, exp: Math.floor(Date.now() / 1000) + 600 },
+    JWT_SECRET,
+  );
+
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: `${GOOGLE_REDIRECT_BASE_URL}/api/auth/google/drive/callback`,
+    response_type: 'code',
+    // openid email lets the callback check which Google account granted access.
+    scope: 'openid email https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/documents',
+    state,
+    access_type: 'offline',
+    prompt: 'consent',
+  });
+
+  return c.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
 
 // GET /api/auth/google/drive/callback — Google redirects here after Drive consent
 authRouter.get('/google/drive/callback', async (c) => {
@@ -564,8 +625,11 @@ authRouter.get('/google/drive/callback', async (c) => {
   }
 
   try {
-    const statePayload = await verify(state, JWT_SECRET, 'HS256') as { type: string; userId: string };
+    const statePayload = await verify(state, JWT_SECRET, 'HS256') as { type?: string; userId?: string; nh?: string };
     if (statePayload.type !== 'drive' || !statePayload.userId) throw new Error('Invalid state');
+    if (!(await verifyOAuthBinding(c, 'drive', statePayload.nh))) {
+      throw new Error('Drive authorization session mismatch. Please start again from this browser.');
+    }
 
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
@@ -584,11 +648,26 @@ authRouter.get('/google/drive/callback', async (c) => {
       throw new Error(`Token exchange failed: ${text}`);
     }
 
-    const { refresh_token, access_token, expires_in } = await tokenRes.json<{
+    const { refresh_token, access_token, expires_in, id_token } = await tokenRes.json<{
       refresh_token?: string;
       access_token: string;
       expires_in: number;
+      id_token?: string;
     }>();
+
+    const db = drizzle(c.env.DB);
+    const targetUser = await db.select().from(userSchema).where(eq(userSchema.id, statePayload.userId)).get();
+    if (!targetUser) throw new Error('User not found');
+
+    // The browser binding cannot stop an attacker from luring a victim through a
+    // start link the attacker generated; storing the victim's Drive grant on the
+    // attacker's account is only prevented by requiring the granting Google
+    // account to be the one this user signs in with.
+    if (!id_token) throw new Error('Google did not return an identity for this grant');
+    const grantor = decodeGoogleIdToken(id_token);
+    if (!isSameGoogleAccount(grantor, targetUser)) {
+      throw new Error('Authorize Drive with the same Google account you use to sign in.');
+    }
 
     if (!refresh_token) {
       // This can happen if the user already granted consent before — revoke at
@@ -596,7 +675,6 @@ authRouter.get('/google/drive/callback', async (c) => {
       throw new Error('No refresh token returned. Please revoke app access in your Google account and try again.');
     }
 
-    const db = drizzle(c.env.DB);
     const expiry = new Date(Date.now() + expires_in * 1000).toISOString();
 
     await db
@@ -622,22 +700,10 @@ authRouter.get('/google/drive/callback', async (c) => {
 // POST /api/auth/invites — Create an invite (protected, requires JWT)
 authRouter.post('/invites', async (c) => {
   try {
-    // Manually extract and verify JWT since /api/auth bypasses middleware
-    const authHeader = c.req.header('Authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return c.json({ error: 'Unauthorized' }, 401);
-    }
-
-    const token = authHeader.slice(7);
-    let payload;
-    try {
-      payload = await verify(token, c.env.JWT_SECRET, 'HS256') as any;
-    } catch {
+    // /api/auth bypasses the session middleware, so run the same session checks here.
+    const payload = await authenticateBearer(c.req.header('Authorization'), c.env.DB, c.env.JWT_SECRET);
+    if (!payload) {
       return c.json({ error: 'Invalid or expired token' }, 401);
-    }
-
-    if (!payload || !payload.sub) {
-      return c.json({ error: 'Unauthorized' }, 401);
     }
 
     const { email, role: requestedRole, permissionsOverride, orgId: requestOrgId, kind = 'member' } = await c.req.json() as {

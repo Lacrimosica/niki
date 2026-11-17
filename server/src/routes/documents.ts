@@ -55,23 +55,17 @@ documentsRouter.get('/drive-auth-url', async (c) => {
     return c.json({ error: 'Google OAuth not configured' }, 503);
   }
 
+  // The browser navigates to this API-origin start URL (not straight to Google) so
+  // the OAuth state can be bound to it with a first-party cookie; see oauth-state.ts.
   const payload = c.get('jwtPayload');
-  const state = await sign(
-    { type: 'drive', userId: payload.sub, exp: Math.floor(Date.now() / 1000) + 600 },
+  const ticket = await sign(
+    { type: 'drive_start', userId: payload.sub, exp: Math.floor(Date.now() / 1000) + 120 },
     JWT_SECRET,
   );
 
-  const params = new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID,
-    redirect_uri: `${GOOGLE_REDIRECT_BASE_URL}/api/auth/google/drive/callback`,
-    response_type: 'code',
-    scope: 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/documents',
-    state,
-    access_type: 'offline',
-    prompt: 'consent',
+  return c.json({
+    url: `${GOOGLE_REDIRECT_BASE_URL}/api/auth/google/drive/start?ticket=${encodeURIComponent(ticket)}`,
   });
-
-  return c.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params}` });
 });
 
 // GET /api/documents/board-officers — returns deduplicated name lists for presidente and segretario suggestions

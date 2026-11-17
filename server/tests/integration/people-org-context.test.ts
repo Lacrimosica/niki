@@ -47,6 +47,8 @@ describe('People route — orgContext scoping (issue #3)', () => {
         orgId,
         role: 'core_admin',
         permissions,
+        typ: 'session',
+        tv: 0,
         exp: Math.floor(Date.now() / 1000) + 3600,
       },
       JWT_SECRET,

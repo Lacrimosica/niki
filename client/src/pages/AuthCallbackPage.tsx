@@ -1,54 +1,67 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { useAuth } from '../hooks/useAuth';
+import { useAuth, type AuthUser } from '../hooks/useAuth';
 import { useSetupStatus } from '../hooks/useSetupStatus';
 
 type Mode = 'login' | 'drive';
+
+type Outcome =
+  | { kind: 'error'; message: string }
+  | { kind: 'login'; token: string; user: AuthUser }
+  | { kind: 'drive' };
+
+/**
+ * Work out the result from the callback URL once, at mount. The server puts the
+ * session token in the fragment so it never reaches server logs or Referer headers;
+ * the effect below then drops it from the address bar and history.
+ */
+function parseCallback(mode: Mode, searchParams: URLSearchParams): Outcome {
+  const errorParam = searchParams.get('error');
+  if (errorParam) return { kind: 'error', message: errorParam };
+
+  if (mode === 'drive') {
+    return searchParams.get('success') === '1'
+      ? { kind: 'drive' }
+      : { kind: 'error', message: 'Autorizzazione Google Drive non riuscita.' };
+  }
+
+  const fragment = new URLSearchParams(window.location.hash.slice(1));
+  const token = fragment.get('token');
+  const userRaw = fragment.get('user');
+  if (!token || !userRaw) return { kind: 'error', message: 'Risposta di autenticazione non valida.' };
+  try {
+    return { kind: 'login', token, user: JSON.parse(userRaw) as AuthUser };
+  } catch {
+    return { kind: 'error', message: 'Impossibile elaborare la risposta di autenticazione.' };
+  }
+}
 
 const AuthCallbackPage = ({ mode }: { mode: Mode }) => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { login } = useAuth();
   const { deploymentMode } = useSetupStatus();
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+  // Lazy initial state: StrictMode re-runs effects, and the fragment is gone by then.
+  const [outcome] = useState(() => parseCallback(mode, searchParams));
+  const error = outcome.kind === 'error' ? outcome.message : null;
+  const success = outcome.kind === 'drive';
 
   useEffect(() => {
-    const errorParam = searchParams.get('error');
-    if (errorParam) {
-      setError(decodeURIComponent(errorParam));
-      return;
+    if (window.location.hash) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
     }
 
-    if (mode === 'login') {
-      const token = searchParams.get('token');
-      const userRaw = searchParams.get('user');
-
-      if (!token || !userRaw) {
-        setError('Risposta di autenticazione non valida.');
-        return;
-      }
-
-      try {
-        const user = JSON.parse(decodeURIComponent(userRaw));
-        login(token, user);
-        navigate('/', { replace: true });
-      } catch {
-        setError('Impossibile elaborare la risposta di autenticazione.');
-      }
+    if (outcome.kind === 'login') {
+      login(outcome.token, outcome.user);
+      navigate('/', { replace: true });
+    } else if (outcome.kind === 'drive') {
+      const timer = setTimeout(() => navigate('/documents', { replace: true }), 1500);
+      return () => clearTimeout(timer);
     }
-
-    if (mode === 'drive') {
-      const success = searchParams.get('success');
-      if (success === '1') {
-        setSuccess(true);
-        setTimeout(() => navigate('/documents', { replace: true }), 1500);
-      } else {
-        setError('Autorizzazione Google Drive non riuscita.');
-      }
-    }
-  }, []);
+    // Runs once per mount: login() and navigate() are not stable references.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outcome]);
 
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
