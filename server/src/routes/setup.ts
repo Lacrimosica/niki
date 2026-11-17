@@ -227,6 +227,8 @@ setupRouter.post('/', async (c) => {
       'settings.users.manage',
       'settings.password.manage',
       'settings.users.reset_password',
+      'data.export',
+      'data.import',
     ];
 
     // ─ Verify Google setup token before writing anything ─

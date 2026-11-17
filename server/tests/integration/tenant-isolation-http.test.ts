@@ -251,7 +251,7 @@ describe('Tenant isolation over HTTP', () => {
 
     it('does not overwrite or take over a row whose id belongs to another org', async () => {
       const { org1, org2, user1, person2 } = await seedTwoOrgs();
-      const token = await mintToken(user1.id, org1.id, []);
+      const token = await mintToken(user1.id, org1.id, ['data.import']);
 
       const res = await importZip(token, {
         'people.tsv': tsv(['id', 'firstName', 'lastName'], [[person2.id, 'Hijacked', 'Row']]),
@@ -265,7 +265,7 @@ describe('Tenant isolation over HTTP', () => {
 
     it('still updates the caller org’s own rows on re-import', async () => {
       const { org1, user1, person1 } = await seedTwoOrgs();
-      const token = await mintToken(user1.id, org1.id, []);
+      const token = await mintToken(user1.id, org1.id, ['data.import']);
 
       const res = await importZip(token, {
         'people.tsv': tsv(['id', 'firstName', 'lastName'], [[person1.id, 'Alicia', 'Restored']]),
@@ -279,7 +279,7 @@ describe('Tenant isolation over HTTP', () => {
 
     it('skips rows that reference another org’s records', async () => {
       const { org1, user1, person2 } = await seedTwoOrgs();
-      const token = await mintToken(user1.id, org1.id, []);
+      const token = await mintToken(user1.id, org1.id, ['data.import']);
       const plantedId = crypto.randomUUID();
 
       const res = await importZip(token, {
@@ -297,7 +297,7 @@ describe('Tenant isolation over HTTP', () => {
 
     it('rejects archives that inflate past the size limit', async () => {
       const { org1, user1 } = await seedTwoOrgs();
-      const token = await mintToken(user1.id, org1.id, []);
+      const token = await mintToken(user1.id, org1.id, ['data.import']);
 
       const res = await importZip(token, { 'padding.bin': new Uint8Array(60 * 1024 * 1024) });
 

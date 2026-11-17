@@ -18,6 +18,8 @@ export const PERMISSIONS = {
   documentsView: 'documents.view',
   documentsGenerate: 'documents.generate',
   documentsManage: 'documents.manage',
+  dataExport: 'data.export',
+  dataImport: 'data.import',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

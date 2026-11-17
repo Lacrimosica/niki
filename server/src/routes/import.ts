@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { drizzle } from 'drizzle-orm/d1';
 import { unzipSync, strFromU8 } from 'fflate';
 import {
   person,
@@ -14,9 +13,11 @@ import {
   complianceRole,
 } from '../db/schema';
 import { unprotectCell } from '../lib/spreadsheet-cell';
+import { orgContext, type JwtPayload } from '../lib/org-context';
+import { recordAuditEvent, clientIp } from '../lib/audit';
 
 type Bindings = { DB: D1Database };
-type Variables = { jwtPayload: { orgId: string; role: string } };
+type Variables = { jwtPayload: JwtPayload };
 
 const importRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
@@ -316,11 +317,9 @@ function parseTsvLine(line: string): string[] {
 }
 
 importRouter.post('/', async (c) => {
-  const payload = c.get('jwtPayload');
-
-  if (payload.role !== 'admin' && payload.role !== 'core_admin') {
-    return c.json({ error: 'Forbidden' }, 403);
-  }
+  const ctx = orgContext(c, 'data.import');
+  if (ctx instanceof Response) return ctx;
+  const { orgId, payload } = ctx;
 
   try {
     const formData = await c.req.formData();
@@ -370,9 +369,10 @@ importRouter.post('/', async (c) => {
       return c.json({ error: 'Invalid MANIFEST.json structure' }, 400);
     }
 
-    const { orgId } = payload;
-    const db = drizzle(c.env.DB);
     const rowCounts: Record<string, number> = {};
+    // Rows may be written before a later table fails, so every attempt that got
+    // this far is audited, not only successful ones.
+    let succeeded = false;
 
     // Disable foreign keys during import to allow out-of-order inserts
     await c.env.DB.prepare('PRAGMA foreign_keys = OFF').run();
@@ -506,6 +506,7 @@ importRouter.post('/', async (c) => {
 
       // Re-enable foreign keys after import
       await c.env.DB.prepare('PRAGMA foreign_keys = ON').run();
+      succeeded = true;
 
       return c.json(
         {
@@ -519,6 +520,13 @@ importRouter.post('/', async (c) => {
       // Re-enable foreign keys even on error
       await c.env.DB.prepare('PRAGMA foreign_keys = ON').run();
       throw err;
+    } finally {
+      await recordAuditEvent(c.env.DB, clientIp(c), {
+        eventType: 'data_import',
+        actorId: payload.sub,
+        orgId,
+        payload: { succeeded, tables: manifest.tables, rowCounts },
+      });
     }
   } catch (err) {
     // Ensure foreign keys are re-enabled on any error

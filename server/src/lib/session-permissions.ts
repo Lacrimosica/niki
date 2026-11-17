@@ -20,6 +20,8 @@ const defaultPermissionsByRole: Record<string, string[]> = {
     'settings.users.manage',
     'settings.password.manage',
     'settings.users.reset_password',
+    'data.export',
+    'data.import',
   ],
   admin: [
     'dashboard.view',
@@ -37,6 +39,8 @@ const defaultPermissionsByRole: Record<string, string[]> = {
     'settings.users.manage',
     'settings.password.manage',
     'settings.users.reset_password',
+    'data.export',
+    'data.import',
   ],
   manager: [
     'dashboard.view',
