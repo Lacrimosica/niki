@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import { drizzle } from 'drizzle-orm/d1';
 import { user as userSchema, organizationSetting as organizationSettingSchema, organization, organizationUser, invite } from '../db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 
 type Bindings = {
   DB: D1Database;
@@ -198,7 +198,8 @@ authRouter.get('/google/callback', async (c) => {
       try {
         inviteRecord = await db.select().from(invite).where(eq(invite.token, inviteToken)).get();
 
-        if (!inviteRecord) {
+        // Org-creation invites are only redeemable through /api/setup.
+        if (!inviteRecord || inviteRecord.kind !== 'member') {
           return c.redirect(`${appUrl}/auth/callback?error=${encodeURIComponent('Invite not found')}`);
         }
 
@@ -214,7 +215,8 @@ authRouter.get('/google/callback', async (c) => {
         }
 
         // If targeted invite, verify email matches
-        if (inviteRecord.email && inviteRecord.email !== email) {
+        // Email addresses are case-insensitive in practice; admins type them by hand.
+        if (inviteRecord.email && inviteRecord.email.trim().toLowerCase() !== email.toLowerCase()) {
           return c.redirect(
             `${appUrl}/auth/callback?error=${encodeURIComponent('Email does not match invite recipient')}`,
           );
@@ -227,6 +229,24 @@ authRouter.get('/google/callback', async (c) => {
       } catch (inviteErr) {
         console.error('Invite validation error:', inviteErr);
         return c.redirect(`${appUrl}/auth/callback?error=${encodeURIComponent('Invalid invite token')}`);
+      }
+
+      // Claim the invite with one conditional UPDATE before writing any user or
+      // membership rows, so concurrent redemptions of the same invite can't both win.
+      // used_by_user_id is filled in once the user row is known to exist (FK).
+      const claimedAt = new Date().toISOString();
+      const claim = await db
+        .update(invite)
+        .set({ usedAt: claimedAt })
+        .where(and(
+          eq(invite.id, inviteRecord.id),
+          eq(invite.kind, 'member'),
+          isNull(invite.usedAt),
+          gt(invite.expiresAt, claimedAt),
+        ))
+        .run();
+      if (claim.meta.changes !== 1) {
+        return c.redirect(`${appUrl}/auth/callback?error=${encodeURIComponent('Invite already used')}`);
       }
     }
 
@@ -287,11 +307,12 @@ authRouter.get('/google/callback', async (c) => {
       existingUser = await db.select().from(userSchema).where(eq(userSchema.id, newUserId)).get();
     } else if (inviteToken) {
       // Existing user redeeming an invite — add to org if not already member
+      // Look up membership in the invite's org specifically: users can belong to several orgs.
       const existingMembership = await db.select().from(organizationUser)
-        .where(eq(organizationUser.userId, existingUser.id))
+        .where(and(eq(organizationUser.userId, existingUser.id), eq(organizationUser.orgId, targetOrgId!)))
         .get();
 
-      if (!existingMembership || existingMembership.orgId !== targetOrgId) {
+      if (!existingMembership) {
         const permissions = targetPermissions
           ? JSON.parse(targetPermissions)
           : getPermissionsForRole(targetRole);
@@ -312,14 +333,11 @@ authRouter.get('/google/callback', async (c) => {
       }
     }
 
-    // Mark invite as used
-    if (inviteRecord) {
+    // The invite was already claimed above; record who redeemed it.
+    if (inviteRecord && existingUser) {
       await db
         .update(invite)
-        .set({
-          usedAt: new Date().toISOString(),
-          usedByUserId: existingUser!.id,
-        })
+        .set({ usedByUserId: existingUser.id })
         .where(eq(invite.id, inviteRecord.id))
         .run();
     }
