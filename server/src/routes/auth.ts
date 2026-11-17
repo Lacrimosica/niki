@@ -11,6 +11,8 @@ type Bindings = {
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_REDIRECT_BASE_URL?: string;
   APP_URL?: string;
+  // Comma-separated emails allowed to issue org-creation invites; unset = nobody.
+  PLATFORM_ADMIN_EMAILS?: string;
 };
 
 const authRouter = new Hono<{ Bindings: Bindings }>();
@@ -20,6 +22,7 @@ import { getPermissionsForRole, sessionPermissions } from '../lib/session-permis
 import { hashPassword, verifyPassword } from '../lib/auth';
 import { decodeGoogleIdToken, rejectGoogleIdentity } from '../lib/google-identity';
 import { rejectGrant } from '../lib/roles';
+import { isPlatformAdmin } from '../lib/deployment-mode';
 
 // A valid "salt:hash" that no password matches; verified against when the user is unknown.
 const DUMMY_PASSWORD_HASH = 'AAAAAAAAAAAAAAAAAAAAAA==:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
@@ -679,34 +682,39 @@ authRouter.post('/invites', async (c) => {
       .where(and(eq(organizationUser.userId, payload.sub), eq(organizationUser.orgId, targetOrgId)))
       .get();
 
-    if (!managerCheck || !['core_admin', 'admin'].includes(managerCheck.role)) {
-      return c.json({ error: 'Permission denied: must be admin in this organization' }, 403);
-    }
-
     if (isOrgCreation) {
-      // There is no platform-admin role, so core_admins of an existing org are the
-      // closest trusted issuers. Role comes from the DB membership, not the JWT.
-      if (managerCheck.role !== 'core_admin') {
-        return c.json({ error: 'Permission denied: only core admins can issue org-creation invites' }, 403);
+      // Org-creation invites start a new tenant, so they are a platform-level power,
+      // not an org-level one: only emails in PLATFORM_ADMIN_EMAILS may issue them.
+      // The email comes from the user row, not the JWT. The caller still needs a
+      // membership in the session org, which the invite row is attached to.
+      const caller = await db.select({ email: userSchema.email }).from(userSchema)
+        .where(eq(userSchema.id, payload.sub))
+        .get();
+      if (!managerCheck || !isPlatformAdmin(c.env.PLATFORM_ADMIN_EMAILS, caller?.email)) {
+        return c.json({ error: 'Permission denied: only platform admins can issue org-creation invites' }, 403);
       }
       if (permissionsOverride?.length) {
         return c.json({ error: 'Org-creation invites do not take permissions' }, 400);
       }
-    }
+    } else {
+      if (!managerCheck || !['core_admin', 'admin'].includes(managerCheck.role)) {
+        return c.json({ error: 'Permission denied: must be admin in this organization' }, 403);
+      }
 
-    let managerPermissions: string[] = [];
-    try {
-      managerPermissions = managerCheck.permissions ? JSON.parse(managerCheck.permissions) : [];
-    } catch {
-      managerPermissions = [];
-    }
-    const grantError = rejectGrant(
-      { role: managerCheck.role, permissions: managerPermissions.length ? managerPermissions : getPermissionsForRole(managerCheck.role) },
-      role,
-      permissionsOverride?.length ? permissionsOverride : undefined,
-    );
-    if (grantError) {
-      return c.json({ error: grantError }, grantError === 'Invalid role' ? 400 : 403);
+      let managerPermissions: string[] = [];
+      try {
+        managerPermissions = managerCheck.permissions ? JSON.parse(managerCheck.permissions) : [];
+      } catch {
+        managerPermissions = [];
+      }
+      const grantError = rejectGrant(
+        { role: managerCheck.role, permissions: managerPermissions.length ? managerPermissions : getPermissionsForRole(managerCheck.role) },
+        role,
+        permissionsOverride?.length ? permissionsOverride : undefined,
+      );
+      if (grantError) {
+        return c.json({ error: grantError }, grantError === 'Invalid role' ? 400 : 403);
+      }
     }
 
     // Create invite token (signed JWT with type='invite')

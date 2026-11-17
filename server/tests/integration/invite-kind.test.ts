@@ -35,8 +35,9 @@ describe('Invite kinds and atomic redemption', () => {
     await cleanupMiniflare();
   });
 
-  function env() {
+  function env(extra: Record<string, string> = {}) {
     return {
+      ...extra,
       DB: getMiniflareRawDB(),
       JWT_SECRET,
       DEPLOYMENT_MODE: 'invite_only',
@@ -163,7 +164,7 @@ describe('Invite kinds and atomic redemption', () => {
   });
 
   describe('issuing org-creation invites', () => {
-    async function issue(token: string, body: Record<string, unknown>) {
+    async function issue(token: string, body: Record<string, unknown>, extraEnv: Record<string, string> = {}) {
       return app.request(
         '/api/auth/invites',
         {
@@ -171,36 +172,60 @@ describe('Invite kinds and atomic redemption', () => {
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         },
-        env(),
+        env(extraEnv),
       );
     }
 
-    it('lets a core_admin issue one, usable for setup', async () => {
-      const { org, admin } = await seedOrgWithAdmin('core_admin');
-      const token = await mintToken(admin.id, org.id, 'core_admin');
+    async function inviteCount() {
+      return (await getMiniflareDB().select().from(schema.invite).all()).length;
+    }
 
-      const res = await issue(token, { kind: 'org_creation' });
+    it('lets a listed platform admin issue one (case-insensitive), usable for setup', async () => {
+      const { org, admin } = await seedOrgWithAdmin('viewer');
+      const token = await mintToken(admin.id, org.id, 'viewer');
+      const list = ` someone@else.local , ${admin.email.toUpperCase()} `;
+
+      const res = await issue(token, { kind: 'org_creation' }, { PLATFORM_ADMIN_EMAILS: list });
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { token: string; kind: string; url: string | null };
+      const body = (await res.json()) as { token: string; kind: string; role: string; url: string | null };
       expect(body.kind).toBe('org_creation');
+      expect(body.role).toBe('core_admin');
       expect(body.url).toBeNull();
 
       expect((await postSetup(body.token, 'f')).status).toBe(200);
     });
 
-    it('refuses a non-core_admin, even with a core_admin claim in the JWT', async () => {
-      const { org, admin } = await seedOrgWithAdmin('admin');
-      await mintToken(admin.id, org.id, 'admin');
+    it('refuses a core_admin who is not listed', async () => {
+      const { org, admin } = await seedOrgWithAdmin('core_admin');
+      const token = await mintToken(admin.id, org.id, 'core_admin');
+
+      const res = await issue(token, { kind: 'org_creation' }, { PLATFORM_ADMIN_EMAILS: 'platform@ops.local' });
+
+      expect(res.status).toBe(403);
+      expect(await inviteCount()).toBe(0);
+    });
+
+    it('uses the email from the user row, not the JWT', async () => {
+      const { org, admin } = await seedOrgWithAdmin('core_admin');
+      await mintToken(admin.id, org.id, 'core_admin');
       const forged = await sign(
-        { sub: admin.id, email: admin.email, orgId: org.id, role: 'core_admin', permissions: [], exp: Math.floor(Date.now() / 1000) + 3600 },
+        { sub: admin.id, email: 'platform@ops.local', orgId: org.id, role: 'core_admin', permissions: [], exp: Math.floor(Date.now() / 1000) + 3600 },
         JWT_SECRET,
       );
 
-      const res = await issue(forged, { kind: 'org_creation' });
+      const res = await issue(forged, { kind: 'org_creation' }, { PLATFORM_ADMIN_EMAILS: 'platform@ops.local' });
 
       expect(res.status).toBe(403);
-      const rows = await getMiniflareDB().select().from(schema.invite).all();
-      expect(rows).toHaveLength(0);
+      expect(await inviteCount()).toBe(0);
+    });
+
+    it('refuses everyone when PLATFORM_ADMIN_EMAILS is unset or empty', async () => {
+      const { org, admin } = await seedOrgWithAdmin('core_admin');
+      const token = await mintToken(admin.id, org.id, 'core_admin');
+
+      expect((await issue(token, { kind: 'org_creation' })).status).toBe(403);
+      expect((await issue(token, { kind: 'org_creation' }, { PLATFORM_ADMIN_EMAILS: ' , ' })).status).toBe(403);
+      expect(await inviteCount()).toBe(0);
     });
 
     it('still issues member invites by default', async () => {

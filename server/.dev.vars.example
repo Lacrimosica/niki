@@ -8,6 +8,9 @@ JWT_SECRET=change-me-local-dev-secret
 # ─── CORS & DEPLOYMENT ─────────────────────────────────────────────────────────
 CORS_ORIGIN=http://localhost:5173
 DEPLOYMENT_MODE=open
+# invite_only: comma-separated emails allowed to issue org-creation invites.
+# Unset or empty means nobody can (additional orgs are then impossible).
+# PLATFORM_ADMIN_EMAILS=you@example.com,other@example.com
 
 # ─── APP URLS ─────────────────────────────────────────────────────────────────
 # Backend URL (used by frontend for OAuth redirects)
