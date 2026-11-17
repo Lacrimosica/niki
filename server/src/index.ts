@@ -5,6 +5,7 @@ import { drizzle } from 'drizzle-orm/d1';
 import { eq, and } from 'drizzle-orm';
 import { organizationUser } from './db/schema';
 import { sessionPermissions } from './lib/session-permissions';
+import { resolveCorsOrigin } from './lib/cors-origin';
 import { peopleRouter } from './routes/people';
 import periodsRouter from './routes/periods';
 import { assembliesRouter } from './routes/assemblies';
@@ -98,10 +99,10 @@ app.get('/health', (c) => {
   });
 });
 
-// Basic CORS setup - Restricted to specific origin in production
+// CORS: only origins listed in CORS_ORIGIN (comma-separated); localhost when unset.
 app.use('*', async (c, next) => {
   const corsMiddleware = cors({
-    origin: c.env.CORS_ORIGIN || '*', // Fallback to * for dev, but recommend setting CORS_ORIGIN
+    origin: (origin) => resolveCorsOrigin(origin, c.env.CORS_ORIGIN),
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
     exposeHeaders: ['Content-Length'],
