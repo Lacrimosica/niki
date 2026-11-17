@@ -386,39 +386,6 @@ authRouter.get('/google/callback', async (c) => {
       orgUser = await db.select().from(organizationUser)
         .where(eq(organizationUser.userId, existingUser.id))
         .get();
-    } else if (orgUser && orgUser.isOwner && orgUser.role !== 'core_admin') {
-      // If user is marked as owner but doesn't have core_admin role, upgrade them
-      // This handles migration cases where owners were reset to viewer
-      const coreAdminPermissions = [
-        'dashboard.view',
-        'people.view',
-        'people.edit',
-        'board.view',
-        'assemblies.view',
-        'assemblies.edit',
-        'convocations.view',
-        'convocations.edit',
-        'timeline.view',
-        'resignations.view',
-        'settings.view',
-        'settings.users.view',
-        'settings.users.manage',
-        'settings.password.manage',
-        'settings.users.reset_password',
-      ];
-
-      await db
-        .update(organizationUser)
-        .set({
-          role: 'core_admin',
-          permissions: JSON.stringify(coreAdminPermissions),
-        })
-        .where(eq(organizationUser.id, orgUser.id))
-        .run();
-
-      orgUser = await db.select().from(organizationUser)
-        .where(eq(organizationUser.id, orgUser.id))
-        .get();
     }
 
     if (!orgUser) {
