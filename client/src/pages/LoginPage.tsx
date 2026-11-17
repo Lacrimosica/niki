@@ -7,6 +7,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useSetupStatus } from '../hooks/useSetupStatus';
 import { useBranding } from '../hooks/useBranding';
 import { API_BASE_URL } from '../config';
+import { apiErrorMessage } from '../lib/api-errors';
 
 const genericBranding = {
   name: '',
@@ -66,8 +67,7 @@ const LoginPage = () => {
 
       login(response.data.token, response.data.user);
     } catch (err: unknown) {
-      const message = axios.isAxiosError(err) ? err.response?.data?.error : undefined;
-      setError(message || t('auth.loginPage.authError'));
+      setError(apiErrorMessage(err, t, t('auth.loginPage.authError')));
     } finally {
       setLoading(false);
     }

@@ -25,6 +25,11 @@ import { RATE_LIMITS, clientIp, consumeRateLimit, emailBucketId, resetRateLimit,
 // A valid "salt:hash" that no password matches; verified against when the user is unknown.
 const DUMMY_PASSWORD_HASH = 'AAAAAAAAAAAAAAAAAAAAAA==:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 
+// One Retry-After for both login buckets: the real per-bucket wait (at most a
+// minute per IP, up to 15 per email) would reveal which bucket tripped, and so
+// that a given email is being targeted.
+const LOGIN_RETRY_AFTER_SECONDS = RATE_LIMITS.loginPerEmail.windowMs / 1000;
+
 authRouter.post('/login', async (c) => {
   const { email, password, slug } = await c.req.json() as { email: string; password: string; slug?: string };
 
@@ -35,12 +40,12 @@ authRouter.post('/login', async (c) => {
   const ip = clientIp(c);
   if (ip) {
     const ipLimit = await consumeRateLimit(c.env.DB, RATE_LIMITS.loginPerIp, ip);
-    if (!ipLimit.allowed) return tooManyAttempts(c, ipLimit.retryAfterSeconds);
+    if (!ipLimit.allowed) return tooManyAttempts(c, LOGIN_RETRY_AFTER_SECONDS);
   }
   const emailBucket = typeof email === 'string' && email.trim() ? await emailBucketId(email) : null;
   if (emailBucket) {
     const emailLimit = await consumeRateLimit(c.env.DB, RATE_LIMITS.loginPerEmail, emailBucket);
-    if (!emailLimit.allowed) return tooManyAttempts(c, emailLimit.retryAfterSeconds);
+    if (!emailLimit.allowed) return tooManyAttempts(c, LOGIN_RETRY_AFTER_SECONDS);
   }
 
   const db = drizzle(c.env.DB);

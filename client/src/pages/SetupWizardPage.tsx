@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../config';
+import { apiErrorMessage } from '../lib/api-errors';
 import { useAuth } from '../hooks/useAuth';
 import { useSetupStatus } from '../hooks/useSetupStatus';
 
@@ -98,7 +99,7 @@ export default function SetupWizardPage() {
       setSetupTokenExp(Math.floor(Date.now() / 1000) + 29 * 60);
     } catch (err) {
       console.error('Failed to fetch setup token:', err);
-      setError(t('setup.errors.setupTokenError'));
+      setError(apiErrorMessage(err, t, t('setup.errors.setupTokenError')));
     }
   }, [t]);
 
@@ -320,11 +321,7 @@ export default function SetupWizardPage() {
       localStorage.removeItem(STORAGE_KEY);
       window.location.href = '/';
     } catch (err) {
-      if (axios.isAxiosError(err) && err.response?.data?.error) {
-        setError(err.response.data.error);
-      } else {
-        setError(t('setup.errors.setupError'));
-      }
+      setError(apiErrorMessage(err, t, t('setup.errors.setupError')));
       setLoading(false);
     }
   };
@@ -375,19 +372,11 @@ export default function SetupWizardPage() {
           login(loginResponse.data.token, loginResponse.data.user);
           window.location.href = '/';
         } catch (loginErr) {
-          if (axios.isAxiosError(loginErr) && loginErr.response?.data?.error) {
-            setError(loginErr.response.data.error);
-          } else {
-            setError(t('setup.errors.setupError'));
-          }
+          setError(apiErrorMessage(loginErr, t, t('setup.errors.setupError')));
         }
         return;
       }
-      if (axios.isAxiosError(err) && err.response?.data?.error) {
-        setError(err.response.data.error);
-      } else {
-        setError(t('setup.errors.setupError'));
-      }
+      setError(apiErrorMessage(err, t, t('setup.errors.setupError')));
     } finally {
       setLoading(false);
     }

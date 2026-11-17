@@ -43,7 +43,11 @@ const RETENTION_MS = HOUR;
 // Pruning scans the whole table, so only a small share of requests pay for it.
 const PRUNE_PROBABILITY = 0.02;
 
-export const TOO_MANY_ATTEMPTS_MESSAGE = 'Troppi tentativi. Riprova più tardi.';
+/**
+ * Machine-readable body for every 429 from this module. The client translates
+ * it; keeping it a fixed code means no endpoint or bucket can be told apart.
+ */
+export const TOO_MANY_REQUESTS_CODE = 'too_many_requests';
 
 /**
  * Client IP as seen by Cloudflare. Deliberately ignores X-Forwarded-For, which
@@ -142,5 +146,5 @@ async function pruneExpiredAttempts(db: D1Database, now: number): Promise<void> 
 /** Generic 429 response; the body never reveals which bucket was exhausted. */
 export function tooManyAttempts(c: Context, retryAfterSeconds: number): Response {
   c.header('Retry-After', String(retryAfterSeconds));
-  return c.json({ error: TOO_MANY_ATTEMPTS_MESSAGE }, 429);
+  return c.json({ error: TOO_MANY_REQUESTS_CODE }, 429);
 }

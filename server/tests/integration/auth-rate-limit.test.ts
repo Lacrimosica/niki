@@ -4,7 +4,7 @@ import { initializeMiniflare, cleanupMiniflare, getMiniflareRawDB } from '../set
 import { resetTestDatabase } from '../setup/db-reset';
 import { createTestOrganization, createTestUser, createTestOrganizationUser } from '../setup/fixtures';
 import { hashPassword } from '../../src/lib/auth';
-import { RATE_LIMITS, TOO_MANY_ATTEMPTS_MESSAGE, consumeRateLimit } from '../../src/lib/rate-limit';
+import { RATE_LIMITS, TOO_MANY_REQUESTS_CODE, consumeRateLimit } from '../../src/lib/rate-limit';
 
 const JWT_SECRET = 'test-jwt-secret-min-32-characters-long!!';
 const PASSWORD = 'correct-horse-battery-staple';
@@ -44,13 +44,14 @@ describe('Rate limiting — login and setup', () => {
     return user;
   }
 
-  async function expectTooMany(res: Response) {
+  async function expectTooMany(res: Response): Promise<number> {
     expect(res.status).toBe(429);
     const retryAfter = Number(res.headers.get('Retry-After'));
     expect(Number.isInteger(retryAfter)).toBe(true);
     expect(retryAfter).toBeGreaterThan(0);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe(TOO_MANY_ATTEMPTS_MESSAGE);
+    // Exactly this body and nothing else, so no bucket or account detail leaks.
+    expect(await res.json()).toEqual({ error: TOO_MANY_REQUESTS_CODE });
+    return retryAfter;
   }
 
   describe('POST /api/auth/login', () => {
@@ -80,6 +81,16 @@ describe('Rate limiting — login and setup', () => {
 
       // Other accounts from the same IP still get normal handling.
       expect((await login('someone-else@test.local', 'wrong', '198.51.100.51')).status).toBe(401);
+    });
+
+    it('returns the same body and Retry-After whichever login bucket tripped', async () => {
+      for (let i = 0; i < 10; i++) await login(`spray-${i}@test.local`, 'wrong', '203.0.113.60');
+      const ipRetry = await expectTooMany(await login('spray-10@test.local', 'wrong', '203.0.113.60'));
+
+      for (let i = 0; i < 5; i++) await login('target@test.local', 'wrong', `203.0.113.${70 + i}`);
+      const emailRetry = await expectTooMany(await login('target@test.local', 'wrong', '203.0.113.80'));
+
+      expect(ipRetry).toBe(emailRetry);
     });
 
     it('applies the same per-email limit to unknown emails, so 429 reveals nothing', async () => {
