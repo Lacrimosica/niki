@@ -25,6 +25,8 @@ const groupedPermissions = [
       PERMISSIONS.settingsManage,
       PERMISSIONS.settingsUsersManage,
       PERMISSIONS.settingsPasswordManage,
+      PERMISSIONS.dataExport,
+      PERMISSIONS.dataImport,
     ],
   },
   {

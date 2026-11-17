@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { drizzle } from 'drizzle-orm/d1';
 import { eq } from 'drizzle-orm';
 import { zipSync, strToU8 } from 'fflate';
 import {
@@ -15,9 +14,11 @@ import {
   complianceRole,
 } from '../db/schema';
 import { protectCell } from '../lib/spreadsheet-cell';
+import { orgContext, type JwtPayload } from '../lib/org-context';
+import { recordAuditEvent, clientIp } from '../lib/audit';
 
 type Bindings = { DB: D1Database };
-type Variables = { jwtPayload: { orgId: string; role: string } };
+type Variables = { jwtPayload: JwtPayload };
 
 const exportRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
@@ -55,12 +56,9 @@ function toTsv(rows: Record<string, unknown>[]): string {
 }
 
 exportRouter.post('/', async (c) => {
-  const payload = c.get('jwtPayload');
-
-  // Role guard: admin and core_admin only
-  if (payload.role !== 'admin' && payload.role !== 'core_admin') {
-    return c.json({ error: 'Forbidden' }, 403);
-  }
+  const ctx = orgContext(c, 'data.export');
+  if (ctx instanceof Response) return ctx;
+  const { db, orgId, payload } = ctx;
 
   const body = await c.req.json<{ tables?: string[] }>();
   const requestedTables = (body.tables ?? []).filter(
@@ -71,8 +69,6 @@ exportRouter.post('/', async (c) => {
     return c.json({ error: 'No valid tables selected' }, 400);
   }
 
-  const { orgId } = payload;
-  const db = drizzle(c.env.DB);
   const files: Record<string, Uint8Array> = {};
   const manifest: {
     exportedAt: string;
@@ -156,6 +152,13 @@ exportRouter.post('/', async (c) => {
   }
 
   files['MANIFEST.json'] = strToU8(JSON.stringify(manifest, null, 2));
+
+  await recordAuditEvent(c.env.DB, clientIp(c), {
+    eventType: 'data_export',
+    actorId: payload.sub,
+    orgId,
+    payload: { tables: requestedTables, rowCounts: manifest.rowCounts },
+  });
 
   const zipBuffer = zipSync(files, { level: 6 });
   const ts = new Date().toISOString().replace(/:/g, '-').replace(/\..+Z$/, 'Z');

@@ -31,6 +31,8 @@ const SettingsPage = () => {
   const canViewUsers = hasPermission(PERMISSIONS.settingsUsersView);
   const canManagePassword = hasPermission(PERMISSIONS.settingsPasswordManage);
   const canResetPasswords = hasPermission(PERMISSIONS.settingsUsersResetPassword);
+  const canExportData = hasPermission(PERMISSIONS.dataExport);
+  const canImportData = hasPermission(PERMISSIONS.dataImport);
 
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     customization: false,
@@ -430,17 +432,17 @@ const SettingsPage = () => {
         </section>
       )}
 
-      {(isCoreAdmin || user?.role === 'admin') && (
-        <>
-          <ExportSection
-            expanded={expandedSections.export}
-            onToggle={() => toggleSection('export')}
-          />
-          <ImportSection
-            expanded={expandedSections.import}
-            onToggle={() => toggleSection('import')}
-          />
-        </>
+      {canExportData && (
+        <ExportSection
+          expanded={expandedSections.export}
+          onToggle={() => toggleSection('export')}
+        />
+      )}
+      {canImportData && (
+        <ImportSection
+          expanded={expandedSections.import}
+          onToggle={() => toggleSection('import')}
+        />
       )}
 
       {/* Customization Section */}

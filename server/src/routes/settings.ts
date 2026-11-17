@@ -56,6 +56,8 @@ const ALL_PERMISSIONS = [
   'documents.view',
   'documents.generate',
   'documents.manage',
+  'data.export',
+  'data.import',
 ];
 
 const defaultPermissionsByRole: Record<string, string[]> = {
