@@ -204,6 +204,8 @@ export const user = sqliteTable('user', {
   googleRefreshToken: text('google_refresh_token'),
   googleAccessToken: text('google_access_token'),
   googleTokenExpiry: text('google_token_expiry'),
+  // Embedded in session tokens as `tv`; incrementing it revokes every outstanding session.
+  tokenVersion: integer('token_version').notNull().default(0),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at'),
 });

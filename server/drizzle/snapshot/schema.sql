@@ -393,7 +393,7 @@ CREATE TABLE "user" (
   google_token_expiry TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT
-);
+, token_version INTEGER DEFAULT 0 NOT NULL);
 CREATE TABLE user_role (
   id TEXT PRIMARY KEY,
   code TEXT NOT NULL UNIQUE,
