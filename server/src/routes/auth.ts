@@ -645,13 +645,22 @@ authRouter.post('/invites', async (c) => {
       return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    const { email, role, permissionsOverride, orgId: requestOrgId } = await c.req.json() as {
+    const { email, role: requestedRole, permissionsOverride, orgId: requestOrgId, kind = 'member' } = await c.req.json() as {
       email?: string;
-      role: string;
+      role?: string;
       permissionsOverride?: string[];
       orgId?: string;
+      kind?: unknown;
     };
 
+    if (kind !== 'member' && kind !== 'org_creation') {
+      return c.json({ error: 'Invalid invite kind' }, 400);
+    }
+    const isOrgCreation = kind === 'org_creation';
+
+    // Whoever redeems an org-creation invite becomes core_admin of the new org,
+    // so the role is fixed rather than chosen by the issuer.
+    const role = isOrgCreation ? 'core_admin' : requestedRole;
     if (!role) {
       return c.json({ error: 'Role is required' }, 400);
     }
@@ -672,6 +681,17 @@ authRouter.post('/invites', async (c) => {
 
     if (!managerCheck || !['core_admin', 'admin'].includes(managerCheck.role)) {
       return c.json({ error: 'Permission denied: must be admin in this organization' }, 403);
+    }
+
+    if (isOrgCreation) {
+      // There is no platform-admin role, so core_admins of an existing org are the
+      // closest trusted issuers. Role comes from the DB membership, not the JWT.
+      if (managerCheck.role !== 'core_admin') {
+        return c.json({ error: 'Permission denied: only core admins can issue org-creation invites' }, 403);
+      }
+      if (permissionsOverride?.length) {
+        return c.json({ error: 'Org-creation invites do not take permissions' }, 400);
+      }
     }
 
     let managerPermissions: string[] = [];
@@ -715,12 +735,14 @@ authRouter.post('/invites', async (c) => {
         createdByUserId: payload.sub,
         expiresAt,
         createdAt: new Date().toISOString(),
+        kind,
       })
       .run();
 
-    // Construct invite URL
+    // Construct invite URL. Org-creation tokens are passed to POST /api/setup as
+    // orgCreationToken; the /join page only handles member invites.
     const appUrl = c.env.APP_URL ?? 'http://localhost:5173';
-    const inviteUrl = `${appUrl}/join?token=${encodeURIComponent(inviteToken)}`;
+    const inviteUrl = isOrgCreation ? null : `${appUrl}/join?token=${encodeURIComponent(inviteToken)}`;
 
     return c.json({
       id: inviteId,
@@ -728,6 +750,7 @@ authRouter.post('/invites', async (c) => {
       url: inviteUrl,
       email: email || null,
       role,
+      kind,
       expiresAt,
     });
   } catch (error) {
@@ -760,7 +783,8 @@ authRouter.get('/invites/:token', async (c) => {
       .where(eq(invite.token, token))
       .get();
 
-    if (!inviteRecord) {
+    // The join page only redeems member invites; org-creation invites go through /api/setup.
+    if (!inviteRecord || inviteRecord.kind !== 'member') {
       return c.json({ error: 'Invite not found' }, 404);
     }
 
