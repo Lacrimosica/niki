@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { initializeMiniflare, cleanupMiniflare, getMiniflareDB } from '../setup/miniflare-context';
 import { resetTestDatabase } from '../setup/db-reset';
 import { createTestOrganization, createTestUser, createTestInvite } from '../setup/fixtures';
 import * as schema from '../../src/db/schema';
+import { callApi, mintSetupToken } from '../setup/http';
 
 describe('Invite Token Race Conditions', () => {
   beforeEach(async () => {
@@ -39,13 +41,13 @@ describe('Invite Token Race Conditions', () => {
         usedAt: new Date().toISOString(),
         usedByUserId: user1.id,
       })
-      .where((t) => t.token === invite.token)
+      .where(eq(schema.invite.token, invite.token))
       .run();
 
     const usedInvite = await db
       .select()
       .from(schema.invite)
-      .where((t) => t.token === invite.token)
+      .where(eq(schema.invite.token, invite.token))
       .get();
 
     expect(usedInvite?.usedAt).not.toBeNull();
@@ -89,14 +91,14 @@ describe('Invite Token Race Conditions', () => {
           usedAt: new Date().toISOString(),
           usedByUserId: user1.id,
         })
-        .where((t) => t.token === invite.token)
+        .where(eq(schema.invite.token, invite.token))
         .run();
 
       // User 2 tries to mark as used (should see it's already used)
       const inviteNow = await db
         .select()
         .from(schema.invite)
-        .where((t) => t.token === invite.token)
+        .where(eq(schema.invite.token, invite.token))
         .get();
 
       expect(inviteNow?.usedByUserId).toBe(user1.id); // User1 won the race
@@ -119,13 +121,14 @@ describe('Invite Token Race Conditions', () => {
     });
 
     // Create expired invite (24+ hours ago)
+    const expiredToken = 'expired-token-' + Date.now();
     const expiredInvite = await db
       .insert(schema.invite)
       .values({
         id: 'expired-' + Date.now(),
         orgId: org.id,
         email: 'expired@example.com',
-        token: 'expired-token-' + Date.now(),
+        token: expiredToken,
         role: 'member',
         createdByUserId: issuer.id,
         expiresAt: new Date(Date.now() - 1000).toISOString(), // 1 second ago
@@ -140,7 +143,7 @@ describe('Invite Token Race Conditions', () => {
     const invite = await db
       .select()
       .from(schema.invite)
-      .where((t) => t.token === 'expired-token-' + Date.now())
+      .where(eq(schema.invite.token, expiredToken))
       .get();
 
     const isExpired = new Date(invite!.expiresAt) < new Date();
@@ -187,7 +190,7 @@ describe('Invite Token Race Conditions', () => {
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
         createdAt: new Date().toISOString(),
       });
-      expect.fail('Should throw UNIQUE constraint error');
+      expect.fail('write unexpectedly succeeded');
     } catch (err) {
       expect((err as Error).message).toMatch(/UNIQUE|constraint/i);
     }
@@ -215,7 +218,7 @@ describe('Invite Token Race Conditions', () => {
     const tokenExists = await db
       .select()
       .from(schema.invite)
-      .where((t) => t.token === invite.token)
+      .where(eq(schema.invite.token, invite.token))
       .get();
 
     expect(tokenExists).toBeTruthy();
@@ -235,15 +238,48 @@ describe('Invite Token Race Conditions', () => {
         usedAt: new Date().toISOString(),
         usedByUserId: user.id,
       })
-      .where((t) => t.token === invite.token)
+      .where(eq(schema.invite.token, invite.token))
       .run();
 
     const updated = await db
       .select()
       .from(schema.invite)
-      .where((t) => t.token === invite.token)
+      .where(eq(schema.invite.token, invite.token))
       .get();
 
     expect(updated?.usedAt).not.toBeNull();
+  });
+
+  // The tests above write and read invite rows directly and never run two
+  // redemptions at once. This one races two real POST /api/setup requests.
+  //
+  // Skipped: FAILS on main ([200, 200], two orgs from one token). setup.ts checks
+  // `usedAt` with a SELECT, creates the org, then marks the invite used with an
+  // unconditional UPDATE, so both requests pass the check. A parallel branch is
+  // rewriting invite redemption in setup.ts (atomic claim); un-skip once it merges.
+  it.skip('two concurrent setups with the same org-creation token create one org', async () => {
+    const org = await createTestOrganization({ slug: 'first-org', name: 'First Organization' });
+    const issuer = await createTestUser({ email: 'issuer@example.com' });
+    const invite = await createTestInvite(org.id, issuer.id);
+
+    const attempt = async (suffix: string) =>
+      callApi('POST', '/api/setup', {
+        mode: 'invite_only',
+        token: await mintSetupToken(),
+        body: {
+          orgName: `Org ${suffix}`,
+          shortName: `O${suffix}`,
+          slug: `race-${suffix}`,
+          adminEmail: `admin-${suffix}@example.com`,
+          adminPassword: 'a-long-enough-password',
+          orgCreationToken: invite.token,
+        },
+      });
+
+    const statuses = (await Promise.all([attempt('a'), attempt('b')])).map((r) => r.status).sort();
+    expect(statuses).toEqual([200, 403]);
+
+    const orgs = await getMiniflareDB().select().from(schema.organization).all();
+    expect(orgs).toHaveLength(2); // first-org + exactly one winner
   });
 });
