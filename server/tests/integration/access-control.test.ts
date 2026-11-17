@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { initializeMiniflare, cleanupMiniflare, getMiniflareDB } from '../setup/miniflare-context';
 import { resetTestDatabase } from '../setup/db-reset';
 import {
@@ -6,7 +7,9 @@ import {
   createTestUser,
   createTestOrganizationUser,
   createTestPerson,
+  createTestInvite,
 } from '../setup/fixtures';
+import { callApi, mintSessionToken } from '../setup/http';
 import * as schema from '../../src/db/schema';
 
 describe('Access Control — Org Boundary Enforcement', () => {
@@ -58,225 +61,125 @@ describe('Access Control — Org Boundary Enforcement', () => {
     // they would get [person1] only, not [person2]
   });
 
+  // The tests below go through the real routes with an org-scoped session
+  // token. Earlier versions queried the DB with `.where((t) => ...)` callbacks,
+  // which Drizzle's select builder silently ignores, so they asserted nothing.
+
+  async function seedSettings(orgId: string, city: string, maxProxies: number) {
+    await getMiniflareDB().insert(schema.organizationSetting).values({
+      id: `setting-${orgId}`,
+      orgId,
+      city,
+      maxProxies,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
   it('user should only see organization settings for their org', async () => {
-    const db = getMiniflareDB();
+    const org1 = await createTestOrganization({ slug: 'org1', name: 'Organization 1' });
+    const org2 = await createTestOrganization({ slug: 'org2', name: 'Organization 2' });
+    const user1 = await createTestUser({ email: 'user1@org1.com' });
+    const user2 = await createTestUser({ email: 'user2@org2.com' });
+    await createTestOrganizationUser(user1.id, org1.id);
+    await createTestOrganizationUser(user2.id, org2.id);
+    await seedSettings(org1.id, 'Milan', 3);
+    await seedSettings(org2.id, 'Rome', 5);
 
-    const org1 = await createTestOrganization({
-      slug: 'org1',
-      name: 'Organization 1',
-    });
+    const token1 = await mintSessionToken(user1.id, org1.id, ['settings.view'], 'admin');
+    const res1 = await callApi('GET', '/api/settings/documents', { token: token1 });
+    expect(res1.status).toBe(200);
+    expect(await res1.json()).toMatchObject({ city: 'Milan', maxProxies: 3 });
 
-    const org2 = await createTestOrganization({
-      slug: 'org2',
-      name: 'Organization 2',
-    });
-
-    // Create settings for each org
-    await db.insert(schema.organizationSetting).values({
-      id: 'setting-org1',
-      orgId: org1.id,
-      city: 'Milan',
-      createdAt: new Date().toISOString(),
-    });
-
-    await db.insert(schema.organizationSetting).values({
-      id: 'setting-org2',
-      orgId: org2.id,
-      city: 'Rome',
-      createdAt: new Date().toISOString(),
-    });
-
-    // User1 in org1 should only see org1 settings
-    const org1Settings = await db
-      .select()
-      .from(schema.organizationSetting)
-      .where((t) => t.orgId === org1.id)
-      .get();
-
-    expect(org1Settings?.city).toBe('Milan');
-    expect(org1Settings?.orgId).toBe(org1.id);
-
-    // User2 in org2 should only see org2 settings
-    const org2Settings = await db
-      .select()
-      .from(schema.organizationSetting)
-      .where((t) => t.orgId === org2.id)
-      .get();
-
-    expect(org2Settings?.city).toBe('Rome');
-    expect(org2Settings?.orgId).toBe(org2.id);
+    const token2 = await mintSessionToken(user2.id, org2.id, ['settings.view'], 'admin');
+    const res2 = await callApi('GET', '/api/settings/documents', { token: token2 });
+    expect(res2.status).toBe(200);
+    expect(await res2.json()).toMatchObject({ city: 'Rome', maxProxies: 5 });
   });
 
   it('user should not be able to access other org members list', async () => {
-    const db = getMiniflareDB();
+    const org1 = await createTestOrganization({ slug: 'org1', name: 'Organization 1' });
+    const org2 = await createTestOrganization({ slug: 'org2', name: 'Organization 2' });
+    const user1 = await createTestUser({ email: 'user1@example.com' });
+    const user2 = await createTestUser({ email: 'user2@example.com' });
+    const user3 = await createTestUser({ email: 'user3@example.com' });
 
-    const org1 = await createTestOrganization({
-      slug: 'org1',
-      name: 'Organization 1',
-    });
-
-    const org2 = await createTestOrganization({
-      slug: 'org2',
-      name: 'Organization 2',
-    });
-
-    const user1 = await createTestUser({
-      email: 'user1@example.com',
-    });
-
-    const user2 = await createTestUser({
-      email: 'user2@example.com',
-    });
-
-    const user3 = await createTestUser({
-      email: 'user3@example.com',
-    });
-
-    // Org1 members: user1, user2
+    // Org1 members: user1, user2. Org2 members: user3
     await createTestOrganizationUser(user1.id, org1.id);
     await createTestOrganizationUser(user2.id, org1.id);
-
-    // Org2 members: user3
     await createTestOrganizationUser(user3.id, org2.id);
 
-    // User1 queries org1 members
-    const org1Members = await db
-      .select()
-      .from(schema.organizationUser)
-      .where((t) => t.orgId === org1.id)
-      .all();
-
-    // User1 should see: user1, user2
-    expect(org1Members.length).toBe(2);
-    expect(org1Members.some((m) => m.userId === user1.id)).toBe(true);
-    expect(org1Members.some((m) => m.userId === user2.id)).toBe(true);
-
-    // User1 should NOT see org2 members
-    const org2Members = await db
-      .select()
-      .from(schema.organizationUser)
-      .where((t) => t.orgId === org2.id)
-      .all();
-
-    // User1 querying org2 would get filtered out at API layer
-    // (Database returns all org2 members, but API filters by JWT orgId)
-    expect(org2Members.length).toBe(1);
-    expect(org2Members[0]?.userId).toBe(user3.id);
+    const token = await mintSessionToken(user1.id, org1.id, ['settings.users.view'], 'admin');
+    const res = await callApi('GET', '/api/settings/users', { token });
+    expect(res.status).toBe(200);
+    const ids = ((await res.json()) as Array<{ id: string }>).map((u) => u.id).sort();
+    expect(ids).toEqual([user1.id, user2.id].sort());
+    expect(ids).not.toContain(user3.id);
   });
 
+  it('a token for one org cannot be used to act in another org', async () => {
+    const org1 = await createTestOrganization({ slug: 'org1', name: 'Organization 1' });
+    const org2 = await createTestOrganization({ slug: 'org2', name: 'Organization 2' });
+    const user1 = await createTestUser({ email: 'user1@example.com' });
+    await createTestOrganizationUser(user1.id, org1.id);
+    await seedSettings(org2.id, 'Rome', 5);
+
+    // A forged claim for an org the user does not belong to is rejected by the
+    // session middleware before any handler runs.
+    const forged = await mintSessionToken(user1.id, org2.id, ['settings.view'], 'core_admin', {
+      syncMembership: false,
+    });
+    const res = await callApi('GET', '/api/settings/documents', { token: forged });
+    expect(res.status).toBe(401);
+  });
+
+  // No route lists invites (creation is POST /api/auth/invites, lookup is by
+  // signed token), so cross-org invite listing cannot leak. Cross-org invite
+  // creation is covered in tenant-isolation-http.test.ts ("invites cannot target
+  // another org"). This remains a DB-level check that invites are org-scoped rows.
   it('user from org1 should not see invites for org2', async () => {
     const db = getMiniflareDB();
 
-    const org1 = await createTestOrganization({
-      slug: 'org1',
-      name: 'Organization 1',
-    });
-
-    const org2 = await createTestOrganization({
-      slug: 'org2',
-      name: 'Organization 2',
-    });
-
-    const admin1 = await createTestUser({
-      email: 'admin1@example.com',
-    });
-
-    const admin2 = await createTestUser({
-      email: 'admin2@example.com',
-    });
-
+    const org1 = await createTestOrganization({ slug: 'org1', name: 'Organization 1' });
+    const org2 = await createTestOrganization({ slug: 'org2', name: 'Organization 2' });
+    const admin1 = await createTestUser({ email: 'admin1@example.com' });
+    const admin2 = await createTestUser({ email: 'admin2@example.com' });
     await createTestOrganizationUser(admin1.id, org1.id, { role: 'admin' });
     await createTestOrganizationUser(admin2.id, org2.id, { role: 'admin' });
 
-    // Create invites for each org
-    await db.insert(schema.invite).values({
-      id: 'invite-org1',
-      orgId: org1.id,
-      email: 'newuser@example.com',
-      token: 'token-org1',
-      role: 'member',
-      createdByUserId: admin1.id,
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-      createdAt: new Date().toISOString(),
-    });
+    await createTestInvite(org1.id, admin1.id, { id: 'invite-org1', token: 'token-org1' });
+    await createTestInvite(org2.id, admin2.id, { id: 'invite-org2', token: 'token-org2' });
 
-    await db.insert(schema.invite).values({
-      id: 'invite-org2',
-      orgId: org2.id,
-      email: 'anotheruser@example.com',
-      token: 'token-org2',
-      role: 'member',
-      createdByUserId: admin2.id,
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-      createdAt: new Date().toISOString(),
-    });
-
-    // Admin1 querying invites for org1
-    const org1Invites = await db
-      .select()
-      .from(schema.invite)
-      .where((t) => t.orgId === org1.id)
-      .all();
-
-    // Admin1 should see only org1 invites
-    expect(org1Invites.length).toBe(1);
-    expect(org1Invites[0]?.token).toBe('token-org1');
-
-    // Admin1 querying org2 invites would be rejected at API layer
-    // (Database returns org2 invites, but API filters by JWT orgId)
+    const org1Invites = await db.select().from(schema.invite).where(eq(schema.invite.orgId, org1.id)).all();
+    expect(org1Invites.map((i) => i.token)).toEqual(['token-org1']);
   });
 
   it('organization settings should not be visible across orgs', async () => {
-    const db = getMiniflareDB();
+    const org1 = await createTestOrganization({ slug: 'org1', name: 'Organization 1' });
+    const org2 = await createTestOrganization({ slug: 'org2', name: 'Organization 2' });
+    const user1 = await createTestUser({ email: 'user1@example.com' });
+    await createTestOrganizationUser(user1.id, org1.id);
+    await seedSettings(org1.id, 'Milan', 3);
+    await seedSettings(org2.id, 'Rome', 5);
 
-    const org1 = await createTestOrganization({
-      slug: 'org1',
-      name: 'Organization 1',
+    const token = await mintSessionToken(user1.id, org1.id, ['settings.view', 'settings.manage'], 'admin');
+
+    // A body cannot redirect the update to another org's settings row.
+    const patch = await callApi('PATCH', '/api/settings/documents', {
+      token,
+      body: { city: 'Turin', orgId: org2.id },
     });
+    expect(patch.status).toBe(200);
 
-    const org2 = await createTestOrganization({
-      slug: 'org2',
-      name: 'Organization 2',
-    });
-
-    // Create settings with different values
-    const setting1 = await db
-      .insert(schema.organizationSetting)
-      .values({
-        id: 'setting-org1',
-        orgId: org1.id,
-        city: 'Milan',
-        maxProxies: 3,
-        createdAt: new Date().toISOString(),
-      });
-
-    const setting2 = await db
-      .insert(schema.organizationSetting)
-      .values({
-        id: 'setting-org2',
-        orgId: org2.id,
-        city: 'Rome',
-        maxProxies: 5,
-        createdAt: new Date().toISOString(),
-      });
-
-    // Query org1 settings
-    const org1Setting = await db
+    const org2Row = await getMiniflareDB()
       .select()
       .from(schema.organizationSetting)
-      .where((t) => t.orgId === org1.id)
+      .where(eq(schema.organizationSetting.orgId, org2.id))
       .get();
+    expect(org2Row?.city).toBe('Rome');
+    expect(org2Row?.maxProxies).toBe(5);
 
-    // Query org2 settings
-    const org2Setting = await db
-      .select()
-      .from(schema.organizationSetting)
-      .where((t) => t.orgId === org2.id)
-      .get();
-
-    // Settings should be different
-    expect(org1Setting?.city).not.toBe(org2Setting?.city);
-    expect(org1Setting?.maxProxies).not.toBe(org2Setting?.maxProxies);
+    const res = await callApi('GET', '/api/settings/documents', { token });
+    expect(await res.json()).toMatchObject({ city: 'Turin', maxProxies: 3 });
   });
 
   it('user switching orgs should require re-authentication', async () => {

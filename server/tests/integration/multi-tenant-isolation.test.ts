@@ -192,7 +192,7 @@ describe('Multi-Tenant Isolation — Organization Boundaries', () => {
     // Attempt duplicate link
     try {
       await createTestOrganizationUser(user.id, org.id);
-      expect.fail('Should throw UNIQUE constraint error');
+      expect.fail('write unexpectedly succeeded');
     } catch (err) {
       expect((err as Error).message).toMatch(/UNIQUE|constraint/i);
     }

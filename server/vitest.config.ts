@@ -14,6 +14,10 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     testTimeout: 30000,
+    // Each integration beforeEach boots workerd and replays every migration
+    // statement; the first one per file regularly exceeds vitest's 10s default
+    // when several files start in parallel.
+    hookTimeout: 60000,
     setupFiles: [],
     include: ['tests/**/*.test.ts'],
     exclude: ['tests/api-collections/**'],

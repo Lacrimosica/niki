@@ -27,7 +27,7 @@ describe('Setup Field Validation', () => {
         slug: 'shared-slug',
         name: 'Organization 2',
       });
-      expect.fail('Should have thrown UNIQUE constraint error');
+      expect.fail('write unexpectedly succeeded');
     } catch (err) {
       expect((err as Error).message).toMatch(/UNIQUE|constraint/i);
     }
@@ -49,7 +49,7 @@ describe('Setup Field Validation', () => {
         name: 'Org 2',
         authDomain: 'example.com',
       });
-      expect.fail('Should have thrown UNIQUE constraint error');
+      expect.fail('write unexpectedly succeeded');
     } catch (err) {
       expect((err as Error).message).toMatch(/UNIQUE|constraint/i);
     }

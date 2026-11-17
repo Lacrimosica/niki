@@ -133,7 +133,7 @@ describe('Database Transaction Isolation', () => {
         joinedAt: new Date().toISOString(),
       });
 
-      expect.fail('Should have failed on FK constraint');
+      expect.fail('write unexpectedly succeeded');
     } catch (err) {
       // Expected: FK constraint violation
       // org_user should not exist
@@ -235,7 +235,7 @@ describe('Database Transaction Isolation', () => {
     // Attempt to create duplicate (same user, same org)
     try {
       await createTestOrganizationUser(user.id, org1.id);
-      expect.fail('Should fail on UNIQUE constraint');
+      expect.fail('write unexpectedly succeeded');
     } catch (err) {
       // Constraint violated, no partial record created
       expect((err as Error).message).toMatch(/UNIQUE|constraint/i);

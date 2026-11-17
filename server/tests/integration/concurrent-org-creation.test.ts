@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { initializeMiniflare, cleanupMiniflare, getMiniflareDB } from '../setup/miniflare-context';
 import { resetTestDatabase } from '../setup/db-reset';
-import { createTestOrganization } from '../setup/fixtures';
+import { createTestOrganization, createTestUser } from '../setup/fixtures';
 import * as schema from '../../src/db/schema';
 
 describe('Concurrent Org Creation — Race Conditions', () => {
@@ -32,7 +33,7 @@ describe('Concurrent Org Creation — Race Conditions', () => {
           slug: slug,
           name: 'Second Organization',
         });
-        expect.fail('Should have thrown UNIQUE constraint error');
+        expect.fail('write unexpectedly succeeded');
       } catch (err) {
         expect((err as Error).message).toMatch(/UNIQUE|constraint/i);
       }
@@ -108,7 +109,7 @@ describe('Concurrent Org Creation — Race Conditions', () => {
           name: 'Org 2',
           authDomain: domain,
         });
-        expect.fail('Should have thrown UNIQUE constraint error');
+        expect.fail('write unexpectedly succeeded');
       } catch (err) {
         expect((err as Error).message).toMatch(/UNIQUE|constraint/i);
       }
@@ -128,8 +129,9 @@ describe('Concurrent Org Creation — Race Conditions', () => {
       name: 'Test Organization',
     });
 
-    // Create a user
-    const userId = 'user-' + Date.now();
+    // organization_user.user_id references user.id, so the user must exist for
+    // the second insert to reach the UNIQUE(user_id, org_id) check at all.
+    const { id: userId } = await createTestUser();
     const orgUserId = 'org-user-' + Date.now();
 
     // First membership
@@ -152,7 +154,7 @@ describe('Concurrent Org Creation — Race Conditions', () => {
         permissions: '[]',
         joinedAt: new Date().toISOString(),
       });
-      expect.fail('Should throw UNIQUE constraint error');
+      expect.fail('write unexpectedly succeeded');
     } catch (err) {
       expect((err as Error).message).toMatch(/UNIQUE|constraint/i);
     }
@@ -166,6 +168,9 @@ describe('Concurrent Org Creation — Race Conditions', () => {
       name: 'Test Organization',
     });
 
+    // invite.created_by_user_id references user.id
+    const admin = await createTestUser({ email: 'admin@example.com' });
+
     // Create invites with unique tokens
     const invites = await Promise.all(
       Array.from({ length: 5 }, (_, i) =>
@@ -175,7 +180,7 @@ describe('Concurrent Org Creation — Race Conditions', () => {
           email: `user${i}@example.com`,
           token: `token-${Date.now()}-${i}`,
           role: 'member',
-          createdByUserId: 'admin-' + Date.now(),
+          createdByUserId: admin.id,
           expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
           createdAt: new Date().toISOString(),
         })
@@ -192,7 +197,10 @@ describe('Concurrent Org Creation — Race Conditions', () => {
     expect(uniqueTokens.size).toBe(tokens.length);
   });
 
-  it('concurrent setup attempts should respect rate limiting', async () => {
+  // Only round-trips rows through setup_attempt, which no src code reads or
+  // writes (POST /api/setup has no rate limiting on main). Skipped until the
+  // rate-limiting branch lands; replace with an HTTP test against its limiter.
+  it.skip('concurrent setup attempts should respect rate limiting', async () => {
     const db = getMiniflareDB();
     const clientIp = '192.168.1.100';
     const now = new Date().toISOString();
@@ -212,7 +220,7 @@ describe('Concurrent Org Creation — Race Conditions', () => {
     const recorded = await db
       .select()
       .from(schema.setupAttempt)
-      .where((t) => t.ip === clientIp)
+      .where(eq(schema.setupAttempt.ip, clientIp))
       .all();
 
     expect(recorded.length).toBe(6);
@@ -236,13 +244,13 @@ describe('Concurrent Org Creation — Race Conditions', () => {
     await db
       .update(schema.organization)
       .set({ isSetupComplete: 1 })
-      .where((t) => t.id === org.id)
+      .where(eq(schema.organization.id, org.id))
       .run();
 
     const updated = await db
       .select()
       .from(schema.organization)
-      .where((t) => t.id === org.id)
+      .where(eq(schema.organization.id, org.id))
       .get();
 
     expect(updated?.isSetupComplete).toBe(1);

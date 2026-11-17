@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { and, eq } from 'drizzle-orm';
 import { initializeMiniflare, cleanupMiniflare, getMiniflareDB } from '../setup/miniflare-context';
 import { resetTestDatabase } from '../setup/db-reset';
 import { createTestOrganization, createTestUser, createTestOrganizationUser } from '../setup/fixtures';
 import * as schema from '../../src/db/schema';
+import { callApi, mintSessionToken } from '../setup/http';
 
 describe('Permissions Isolation — Role-Based Access Control', () => {
   beforeEach(async () => {
@@ -41,7 +43,7 @@ describe('Permissions Isolation — Role-Based Access Control', () => {
     const orgUser = await db
       .select()
       .from(schema.organizationUser)
-      .where((t) => t.userId === user.id && t.orgId === org.id)
+      .where(and(eq(schema.organizationUser.userId, user.id), eq(schema.organizationUser.orgId, org.id)))
       .get();
 
     const permissions = JSON.parse(orgUser?.permissions || '[]');
@@ -86,7 +88,7 @@ describe('Permissions Isolation — Role-Based Access Control', () => {
     const org1User = await db
       .select()
       .from(schema.organizationUser)
-      .where((t) => t.userId === user.id && t.orgId === org1.id)
+      .where(and(eq(schema.organizationUser.userId, user.id), eq(schema.organizationUser.orgId, org1.id)))
       .get();
 
     const org1Perms = JSON.parse(org1User?.permissions || '[]');
@@ -95,7 +97,7 @@ describe('Permissions Isolation — Role-Based Access Control', () => {
     const org2User = await db
       .select()
       .from(schema.organizationUser)
-      .where((t) => t.userId === user.id && t.orgId === org2.id)
+      .where(and(eq(schema.organizationUser.userId, user.id), eq(schema.organizationUser.orgId, org2.id)))
       .get();
 
     const org2Perms = JSON.parse(org2User?.permissions || '[]');
@@ -139,7 +141,7 @@ describe('Permissions Isolation — Role-Based Access Control', () => {
     const orgUser = await db
       .select()
       .from(schema.organizationUser)
-      .where((t) => t.userId === user.id)
+      .where(eq(schema.organizationUser.userId, user.id))
       .get();
 
     expect(orgUser?.role).toBe('core_admin');
@@ -172,7 +174,7 @@ describe('Permissions Isolation — Role-Based Access Control', () => {
     const orgUser = await db
       .select()
       .from(schema.organizationUser)
-      .where((t) => t.userId === user.id)
+      .where(eq(schema.organizationUser.userId, user.id))
       .get();
 
     expect(orgUser?.role).toBe('member');
@@ -208,13 +210,13 @@ describe('Permissions Isolation — Role-Based Access Control', () => {
     const ownerMembership = await db
       .select()
       .from(schema.organizationUser)
-      .where((t) => t.userId === owner.id)
+      .where(eq(schema.organizationUser.userId, owner.id))
       .get();
 
     const memberMembership = await db
       .select()
       .from(schema.organizationUser)
-      .where((t) => t.userId === member.id)
+      .where(eq(schema.organizationUser.userId, member.id))
       .get();
 
     expect(ownerMembership?.isOwner).toBe(1);
@@ -245,7 +247,7 @@ describe('Permissions Isolation — Role-Based Access Control', () => {
     const membership = await db
       .select()
       .from(schema.organizationUser)
-      .where((t) => t.userId === newUser.id)
+      .where(eq(schema.organizationUser.userId, newUser.id))
       .get();
 
     expect(membership?.invitedByUserId).toBe(admin.id);
@@ -272,9 +274,37 @@ describe('Permissions Isolation — Role-Based Access Control', () => {
     const membership = await db
       .select()
       .from(schema.organizationUser)
-      .where((t) => t.userId === user.id)
+      .where(eq(schema.organizationUser.userId, user.id))
       .get();
 
     expect(membership?.joinedAt).toBe(now);
+  });
+
+  it('a session uses the permissions of the token org membership, not another org', async () => {
+    const org1 = await createTestOrganization({ slug: 'org1', name: 'Organization 1' });
+    const org2 = await createTestOrganization({ slug: 'org2', name: 'Organization 2' });
+    const user = await createTestUser({ email: 'user@example.com' });
+
+    await createTestOrganizationUser(user.id, org1.id, {
+      role: 'admin',
+      permissions: JSON.stringify(['settings.users.view']),
+    });
+    await createTestOrganizationUser(user.id, org2.id, {
+      role: 'member',
+      permissions: JSON.stringify(['dashboard.view']),
+      isOwner: 0,
+    });
+
+    const org1Token = await mintSessionToken(user.id, org1.id, ['settings.users.view'], 'admin', {
+      syncMembership: false,
+    });
+    expect((await callApi('GET', '/api/settings/users', { token: org1Token })).status).toBe(200);
+
+    // The org2 token claims org1's permissions; the middleware reloads the org2
+    // membership from the DB, so the claim is ignored.
+    const org2Token = await mintSessionToken(user.id, org2.id, ['settings.users.view'], 'admin', {
+      syncMembership: false,
+    });
+    expect((await callApi('GET', '/api/settings/users', { token: org2Token })).status).toBe(403);
   });
 });

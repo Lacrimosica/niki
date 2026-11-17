@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { initializeMiniflare, cleanupMiniflare, getMiniflareDB } from '../setup/miniflare-context';
+import { eq } from 'drizzle-orm';
+import { initializeMiniflare, cleanupMiniflare, getMiniflareDB, getMiniflareRawDB } from '../setup/miniflare-context';
+import { createTestOrganization } from '../setup/fixtures';
 import { resetTestDatabase } from '../setup/db-reset';
 import * as schema from '../../src/db/schema';
 
@@ -14,15 +16,12 @@ describe('Database Migrations', () => {
   });
 
   it('all required tables should exist after migrations', async () => {
-    const db = getMiniflareDB();
+    // Drizzle's db.all() takes a SQL object, not a string; use the raw D1 binding.
+    const result = await getMiniflareRawDB()
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+      .all<{ name: string }>();
 
-    const result = await db.all(`
-      SELECT name FROM sqlite_master
-      WHERE type='table' AND name NOT LIKE 'sqlite_%'
-      ORDER BY name;
-    `);
-
-    const tableNames = (result.results || []).map((row) => row.name as string);
+    const tableNames = (result.results || []).map((row) => row.name);
 
     expect(tableNames).toContain('person');
     expect(tableNames).toContain('organization');
@@ -31,6 +30,9 @@ describe('Database Migrations', () => {
     expect(tableNames).toContain('assembly');
     expect(tableNames).toContain('attendance');
     expect(tableNames).toContain('organization_setting');
+    expect(tableNames).toContain('invite');
+    expect(tableNames).toContain('audit_event');
+    expect(tableNames).toContain('setup_attempt');
   });
 
   it('lookup tables should be seeded without duplicates', async () => {
@@ -58,7 +60,7 @@ describe('Database Migrations', () => {
     const setting = await db
       .select()
       .from(schema.organizationSetting)
-      .where((t) => t.id === 'test-setting')
+      .where(eq(schema.organizationSetting.id, 'test-setting'))
       .get();
 
     expect(setting).toBeTruthy();
@@ -80,7 +82,7 @@ describe('Database Migrations', () => {
     const retrieved = await db
       .select()
       .from(schema.organization)
-      .where((t) => t.id === 'test-org')
+      .where(eq(schema.organization.id, 'test-org'))
       .get();
 
     expect(retrieved).toBeTruthy();
@@ -90,25 +92,30 @@ describe('Database Migrations', () => {
 
   it('volunteer_period should support both old and new status columns', async () => {
     const db = getMiniflareDB();
+    // person.org_id and volunteer_period.org_id are NOT NULL since migration 0065.
+    const org = await createTestOrganization();
 
     // First create a person
     const person = await db
       .insert(schema.person)
       .values({
         id: 'test-person',
+        orgId: org.id,
         firstName: 'Test',
         lastName: 'Person',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
 
-    // Create volunteer period with legacy 'status' field
+    // Legacy text 'status' plus the Phase 3 FK into the seeded volunteer_status lookup
     const period = await db
       .insert(schema.volunteerPeriod)
       .values({
         id: 'test-period',
+        orgId: org.id,
         personId: 'test-person',
         status: 'active',
+        statusId: 'vstatus-01',
         enrollmentDate: new Date().toISOString(),
         createdAt: new Date().toISOString(),
       });
@@ -116,10 +123,11 @@ describe('Database Migrations', () => {
     const retrieved = await db
       .select()
       .from(schema.volunteerPeriod)
-      .where((t) => t.id === 'test-period')
+      .where(eq(schema.volunteerPeriod.id, 'test-period'))
       .get();
 
     expect(retrieved).toBeTruthy();
     expect(retrieved?.status).toBe('active');
+    expect(retrieved?.statusId).toBe('vstatus-01');
   });
 });

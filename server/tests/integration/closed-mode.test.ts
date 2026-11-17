@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { initializeMiniflare, cleanupMiniflare, getMiniflareDB } from '../setup/miniflare-context';
 import { resetTestDatabase } from '../setup/db-reset';
 import { createTestOrganization, createTestUser, createTestOrganizationUser } from '../setup/fixtures';
 import * as schema from '../../src/db/schema';
+import { callApi, mintSetupToken } from '../setup/http';
 
 describe('Closed Mode — No New Organizations', () => {
   beforeEach(async () => {
@@ -14,20 +16,27 @@ describe('Closed Mode — No New Organizations', () => {
     await cleanupMiniflare();
   });
 
+  const setupBody = {
+    orgName: 'New Org',
+    shortName: 'NO',
+    slug: 'new-org',
+    adminEmail: 'admin@new-org.local',
+    adminPassword: 'a-long-enough-password',
+  };
+
   it('setup endpoint should return 423 Locked in closed mode', async () => {
-    // In real API test: POST /api/setup should return 423
-    // For DB test: verify deployment mode setting
-    const db = getMiniflareDB();
+    await createTestOrganization({ slug: 'existing-org', name: 'Existing Organization', isSetupComplete: 1 });
 
-    // Closed mode should not allow new org creation through normal flow
-    // Create org directly for testing (API layer should prevent this)
-    const org = await createTestOrganization({
-      slug: 'existing-org',
-      name: 'Existing Organization',
-      isSetupComplete: 1,
+    const tokenRes = await callApi('GET', '/api/setup/token', { mode: 'closed' });
+    expect(tokenRes.status).toBe(423);
+
+    // Even with a validly signed setup token, creation is refused.
+    const res = await callApi('POST', '/api/setup', {
+      mode: 'closed',
+      token: await mintSetupToken(),
+      body: setupBody,
     });
-
-    expect(org.id).toBeTruthy();
+    expect(res.status).toBe(423);
   });
 
   it('existing users can still access their organizations', async () => {
@@ -52,7 +61,7 @@ describe('Closed Mode — No New Organizations', () => {
     const retrieved = await db
       .select()
       .from(schema.organizationUser)
-      .where((t) => t.id === orgUser.id)
+      .where(eq(schema.organizationUser.id, orgUser.id))
       .get();
 
     expect(retrieved).toBeTruthy();
@@ -63,25 +72,27 @@ describe('Closed Mode — No New Organizations', () => {
   it('new organization creation should be blocked', async () => {
     const db = getMiniflareDB();
 
-    // In closed mode, the API layer blocks org creation
-    // This test verifies the state that should prevent it
-    const beforeCount = await db.select().from(schema.organization).all();
-    const initialCount = beforeCount.length;
+    // Also refused on a fresh database: closed mode has no first-org exception.
+    const res = await callApi('POST', '/api/setup', {
+      mode: 'closed',
+      token: await mintSetupToken(),
+      body: setupBody,
+    });
+    expect(res.status).toBe(423);
 
-    // Attempt to create new org (in real API, would fail at endpoint)
-    // For integration test, we just verify the count
-    expect(initialCount).toBeGreaterThanOrEqual(0);
+    expect(await db.select().from(schema.organization).all()).toHaveLength(0);
+    expect(await db.select().from(schema.user).all()).toHaveLength(0);
+    expect(await db.select().from(schema.auditEvent).all()).toHaveLength(0);
   });
 
-  it('audit logging should record setup attempts', async () => {
-    const db = getMiniflareDB();
-
-    // Verify audit_event table exists for logging attempts
-    const result = await db.all(`
-      SELECT name FROM sqlite_master
-      WHERE type='table' AND name='audit_event';
-    `);
-
-    expect(result.results?.length).toBeGreaterThan(0);
+  // The original version only checked that the audit_event table exists (now
+  // covered in migrations.test.ts). src/routes/setup.ts audits successful org
+  // creation only; rejected closed-mode attempts are not recorded anywhere.
+  // Follow-up: decide whether the setup rate-limiting branch's attempt tracking
+  // should cover this, then assert it here over HTTP.
+  it.skip('audit logging should record setup attempts', async () => {
+    await callApi('POST', '/api/setup', { mode: 'closed', token: await mintSetupToken(), body: setupBody });
+    const events = await getMiniflareDB().select().from(schema.auditEvent).all();
+    expect(events.length).toBeGreaterThan(0);
   });
 });
