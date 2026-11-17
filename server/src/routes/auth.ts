@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import { drizzle } from 'drizzle-orm/d1';
 import { user as userSchema, organizationSetting as organizationSettingSchema, organization, organizationUser, invite } from '../db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 
 type Bindings = {
   DB: D1Database;
@@ -11,6 +11,8 @@ type Bindings = {
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_REDIRECT_BASE_URL?: string;
   APP_URL?: string;
+  // Comma-separated emails allowed to issue org-creation invites; unset = nobody.
+  PLATFORM_ADMIN_EMAILS?: string;
 };
 
 const authRouter = new Hono<{ Bindings: Bindings }>();
@@ -21,6 +23,7 @@ import { hashPassword, verifyPassword } from '../lib/auth';
 import { decodeGoogleIdToken, rejectGoogleIdentity } from '../lib/google-identity';
 import { rejectGrant } from '../lib/roles';
 import { RATE_LIMITS, clientIp, consumeRateLimit, emailBucketId, resetRateLimit, tooManyAttempts } from '../lib/rate-limit';
+import { isPlatformAdmin } from '../lib/deployment-mode';
 
 // A valid "salt:hash" that no password matches; verified against when the user is unknown.
 const DUMMY_PASSWORD_HASH = 'AAAAAAAAAAAAAAAAAAAAAA==:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
@@ -223,7 +226,8 @@ authRouter.get('/google/callback', async (c) => {
       try {
         inviteRecord = await db.select().from(invite).where(eq(invite.token, inviteToken)).get();
 
-        if (!inviteRecord) {
+        // Org-creation invites are only redeemable through /api/setup.
+        if (!inviteRecord || inviteRecord.kind !== 'member') {
           return c.redirect(`${appUrl}/auth/callback?error=${encodeURIComponent('Invite not found')}`);
         }
 
@@ -239,7 +243,8 @@ authRouter.get('/google/callback', async (c) => {
         }
 
         // If targeted invite, verify email matches
-        if (inviteRecord.email && inviteRecord.email !== email) {
+        // Email addresses are case-insensitive in practice; admins type them by hand.
+        if (inviteRecord.email && inviteRecord.email.trim().toLowerCase() !== email.toLowerCase()) {
           return c.redirect(
             `${appUrl}/auth/callback?error=${encodeURIComponent('Email does not match invite recipient')}`,
           );
@@ -252,6 +257,24 @@ authRouter.get('/google/callback', async (c) => {
       } catch (inviteErr) {
         console.error('Invite validation error:', inviteErr);
         return c.redirect(`${appUrl}/auth/callback?error=${encodeURIComponent('Invalid invite token')}`);
+      }
+
+      // Claim the invite with one conditional UPDATE before writing any user or
+      // membership rows, so concurrent redemptions of the same invite can't both win.
+      // used_by_user_id is filled in once the user row is known to exist (FK).
+      const claimedAt = new Date().toISOString();
+      const claim = await db
+        .update(invite)
+        .set({ usedAt: claimedAt })
+        .where(and(
+          eq(invite.id, inviteRecord.id),
+          eq(invite.kind, 'member'),
+          isNull(invite.usedAt),
+          gt(invite.expiresAt, claimedAt),
+        ))
+        .run();
+      if (claim.meta.changes !== 1) {
+        return c.redirect(`${appUrl}/auth/callback?error=${encodeURIComponent('Invite already used')}`);
       }
     }
 
@@ -312,11 +335,12 @@ authRouter.get('/google/callback', async (c) => {
       existingUser = await db.select().from(userSchema).where(eq(userSchema.id, newUserId)).get();
     } else if (inviteToken) {
       // Existing user redeeming an invite — add to org if not already member
+      // Look up membership in the invite's org specifically: users can belong to several orgs.
       const existingMembership = await db.select().from(organizationUser)
-        .where(eq(organizationUser.userId, existingUser.id))
+        .where(and(eq(organizationUser.userId, existingUser.id), eq(organizationUser.orgId, targetOrgId!)))
         .get();
 
-      if (!existingMembership || existingMembership.orgId !== targetOrgId) {
+      if (!existingMembership) {
         const permissions = targetPermissions
           ? JSON.parse(targetPermissions)
           : getPermissionsForRole(targetRole);
@@ -337,14 +361,11 @@ authRouter.get('/google/callback', async (c) => {
       }
     }
 
-    // Mark invite as used
-    if (inviteRecord) {
+    // The invite was already claimed above; record who redeemed it.
+    if (inviteRecord && existingUser) {
       await db
         .update(invite)
-        .set({
-          usedAt: new Date().toISOString(),
-          usedByUserId: existingUser!.id,
-        })
+        .set({ usedByUserId: existingUser.id })
         .where(eq(invite.id, inviteRecord.id))
         .run();
     }
@@ -619,13 +640,22 @@ authRouter.post('/invites', async (c) => {
       return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    const { email, role, permissionsOverride, orgId: requestOrgId } = await c.req.json() as {
+    const { email, role: requestedRole, permissionsOverride, orgId: requestOrgId, kind = 'member' } = await c.req.json() as {
       email?: string;
-      role: string;
+      role?: string;
       permissionsOverride?: string[];
       orgId?: string;
+      kind?: unknown;
     };
 
+    if (kind !== 'member' && kind !== 'org_creation') {
+      return c.json({ error: 'Invalid invite kind' }, 400);
+    }
+    const isOrgCreation = kind === 'org_creation';
+
+    // Whoever redeems an org-creation invite becomes core_admin of the new org,
+    // so the role is fixed rather than chosen by the issuer.
+    const role = isOrgCreation ? 'core_admin' : requestedRole;
     if (!role) {
       return c.json({ error: 'Role is required' }, 400);
     }
@@ -644,23 +674,39 @@ authRouter.post('/invites', async (c) => {
       .where(and(eq(organizationUser.userId, payload.sub), eq(organizationUser.orgId, targetOrgId)))
       .get();
 
-    if (!managerCheck || !['core_admin', 'admin'].includes(managerCheck.role)) {
-      return c.json({ error: 'Permission denied: must be admin in this organization' }, 403);
-    }
+    if (isOrgCreation) {
+      // Org-creation invites start a new tenant, so they are a platform-level power,
+      // not an org-level one: only emails in PLATFORM_ADMIN_EMAILS may issue them.
+      // The email comes from the user row, not the JWT. The caller still needs a
+      // membership in the session org, which the invite row is attached to.
+      const caller = await db.select({ email: userSchema.email }).from(userSchema)
+        .where(eq(userSchema.id, payload.sub))
+        .get();
+      if (!managerCheck || !isPlatformAdmin(c.env.PLATFORM_ADMIN_EMAILS, caller?.email)) {
+        return c.json({ error: 'Permission denied: only platform admins can issue org-creation invites' }, 403);
+      }
+      if (permissionsOverride?.length) {
+        return c.json({ error: 'Org-creation invites do not take permissions' }, 400);
+      }
+    } else {
+      if (!managerCheck || !['core_admin', 'admin'].includes(managerCheck.role)) {
+        return c.json({ error: 'Permission denied: must be admin in this organization' }, 403);
+      }
 
-    let managerPermissions: string[] = [];
-    try {
-      managerPermissions = managerCheck.permissions ? JSON.parse(managerCheck.permissions) : [];
-    } catch {
-      managerPermissions = [];
-    }
-    const grantError = rejectGrant(
-      { role: managerCheck.role, permissions: managerPermissions.length ? managerPermissions : getPermissionsForRole(managerCheck.role) },
-      role,
-      permissionsOverride?.length ? permissionsOverride : undefined,
-    );
-    if (grantError) {
-      return c.json({ error: grantError }, grantError === 'Invalid role' ? 400 : 403);
+      let managerPermissions: string[] = [];
+      try {
+        managerPermissions = managerCheck.permissions ? JSON.parse(managerCheck.permissions) : [];
+      } catch {
+        managerPermissions = [];
+      }
+      const grantError = rejectGrant(
+        { role: managerCheck.role, permissions: managerPermissions.length ? managerPermissions : getPermissionsForRole(managerCheck.role) },
+        role,
+        permissionsOverride?.length ? permissionsOverride : undefined,
+      );
+      if (grantError) {
+        return c.json({ error: grantError }, grantError === 'Invalid role' ? 400 : 403);
+      }
     }
 
     // Create invite token (signed JWT with type='invite')
@@ -689,12 +735,14 @@ authRouter.post('/invites', async (c) => {
         createdByUserId: payload.sub,
         expiresAt,
         createdAt: new Date().toISOString(),
+        kind,
       })
       .run();
 
-    // Construct invite URL
+    // Construct invite URL. Org-creation tokens are passed to POST /api/setup as
+    // orgCreationToken; the /join page only handles member invites.
     const appUrl = c.env.APP_URL ?? 'http://localhost:5173';
-    const inviteUrl = `${appUrl}/join?token=${encodeURIComponent(inviteToken)}`;
+    const inviteUrl = isOrgCreation ? null : `${appUrl}/join?token=${encodeURIComponent(inviteToken)}`;
 
     return c.json({
       id: inviteId,
@@ -702,6 +750,7 @@ authRouter.post('/invites', async (c) => {
       url: inviteUrl,
       email: email || null,
       role,
+      kind,
       expiresAt,
     });
   } catch (error) {
@@ -734,7 +783,8 @@ authRouter.get('/invites/:token', async (c) => {
       .where(eq(invite.token, token))
       .get();
 
-    if (!inviteRecord) {
+    // The join page only redeems member invites; org-creation invites go through /api/setup.
+    if (!inviteRecord || inviteRecord.kind !== 'member') {
       return c.json({ error: 'Invite not found' }, 404);
     }
 

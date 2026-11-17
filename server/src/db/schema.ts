@@ -247,6 +247,8 @@ export const invite = sqliteTable('invite', {
   usedAt: text('used_at'),
   usedByUserId: text('used_by_user_id').references(() => user.id),
   createdAt: text('created_at').notNull(),
+  // 'member' joins orgId; 'org_creation' lets the holder create a new org in invite_only mode.
+  kind: text('kind', { enum: ['member', 'org_creation'] }).notNull().default('member'),
 });
 
 export const organizationSetting = sqliteTable('organization_setting', {

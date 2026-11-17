@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import { drizzle } from 'drizzle-orm/d1';
-import { eq, count } from 'drizzle-orm';
+import { and, eq, count, gt, isNull } from 'drizzle-orm';
 import { hashPassword, verifyPassword } from '../lib/auth';
 import { parseDeploymentMode, canCreateOrg, type DeploymentMode, getOrganizationSettingId } from '../lib/deployment-mode';
 import { organization, organizationUser, user, organizationSetting, invite, auditEvent } from '../db/schema';
@@ -146,15 +146,20 @@ setupRouter.post('/', async (c) => {
       return c.json({ error: 'Organization creation is not allowed.' }, 403);
     }
 
-    // If using org-creation invite, validate and mark as used
-    if (hasOrgCreationToken && completedOrgCount > 0 && orgCreationToken) {
+    // Only invite_only mode gates additional orgs behind an invite; in open mode a
+    // supplied token is irrelevant and must not be consumed.
+    const usesOrgCreationInvite = deploymentMode === 'invite_only' && completedOrgCount > 0 && !!orgCreationToken;
+
+    // Pre-check for clear error messages; the authoritative check is the atomic claim below.
+    if (usesOrgCreationInvite && orgCreationToken) {
       const inviteRecord = await db
         .select()
         .from(invite)
         .where(eq(invite.token, orgCreationToken))
         .get();
 
-      if (!inviteRecord) {
+      // Member invites can be minted by any org admin, so they must never unlock org creation.
+      if (!inviteRecord || inviteRecord.kind !== 'org_creation') {
         return c.json({ error: 'Invalid org-creation token.' }, 403);
       }
 
@@ -167,8 +172,10 @@ setupRouter.post('/', async (c) => {
         return c.json({ error: 'This org-creation token has expired.' }, 403);
       }
 
-      // Token is valid; will mark as used after org creation
-      // (orgCreationToken is guaranteed to be defined here due to hasOrgCreationToken check)
+      // A targeted invite is only for the address it was issued to.
+      if (inviteRecord.email && inviteRecord.email.trim().toLowerCase() !== (adminEmail ?? '').trim().toLowerCase()) {
+        return c.json({ error: 'This org-creation token was issued to a different email address.' }, 403);
+      }
     }
 
     // ─ Validate required fields ─
@@ -257,6 +264,39 @@ setupRouter.post('/', async (c) => {
       }
     }
 
+    // ─ Claim the org-creation invite ─
+    // A single conditional UPDATE so two concurrent requests cannot both redeem it.
+    // used_by_user_id can't be set yet (FK to a user that doesn't exist until the
+    // batch below), so the claim records only used_at and the batch fills in the user.
+    if (usesOrgCreationInvite && orgCreationToken) {
+      const claim = await db
+        .update(invite)
+        .set({ usedAt: now })
+        .where(and(
+          eq(invite.token, orgCreationToken),
+          eq(invite.kind, 'org_creation'),
+          isNull(invite.usedAt),
+          gt(invite.expiresAt, now),
+        ))
+        .run();
+      if (claim.meta.changes !== 1) {
+        return c.json({ error: 'This org-creation token has already been used.' }, 403);
+      }
+    }
+
+    const releaseInviteClaim = async () => {
+      if (!usesOrgCreationInvite || !orgCreationToken) return;
+      try {
+        await db
+          .update(invite)
+          .set({ usedAt: null })
+          .where(and(eq(invite.token, orgCreationToken), eq(invite.usedAt, now), isNull(invite.usedByUserId)))
+          .run();
+      } catch (err) {
+        console.error('Failed to release org-creation invite claim:', err);
+      }
+    };
+
     // ─ Create org, admin user, membership and settings atomically ─
     // A partial write (e.g. org row without its admin) would permanently block
     // setup in single_org mode, so all rows go in one batch or none do.
@@ -314,30 +354,21 @@ setupRouter.post('/', async (c) => {
           createdAt: now,
           updatedAt: now
         }),
+        // Record who redeemed the invite, in the same batch as the user it points to.
+        ...(usesOrgCreationInvite && orgCreationToken
+          ? [db.update(invite)
+              .set({ usedByUserId: userId })
+              .where(and(eq(invite.token, orgCreationToken), eq(invite.usedAt, now)))]
+          : []),
       ]);
     } catch (err: any) {
       console.error('Organization setup insert failed:', err.message, err);
+      // Nothing was written, so give the invite back rather than burning it.
+      await releaseInviteClaim();
       if (err.message && err.message.includes('UNIQUE')) {
         return c.json({ error: 'Organization already exists (concurrent creation detected).' }, 409);
       }
       throw err;
-    }
-
-    // ─ Mark org-creation invite as used (if applicable) ─
-    if (hasOrgCreationToken && completedOrgCount > 0 && orgCreationToken) {
-      try {
-        await db
-          .update(invite)
-          .set({
-            usedAt: now,
-            usedByUserId: userId
-          })
-          .where(eq(invite.token, orgCreationToken))
-          .run();
-      } catch (err) {
-        console.error('Failed to mark org-creation invite as used:', err);
-        // Don't fail the entire setup; the org was created successfully
-      }
     }
 
     // ─ Audit log ─

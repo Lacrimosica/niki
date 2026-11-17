@@ -80,10 +80,11 @@ Niki (formerly Gestionale-ETS) supports four deployment modes, controlled by the
 
 **Behavior:**
 - First user creates the first organization via setup wizard (no token required)
-- Additional organization creation requires a valid invite token (issued by existing org admins)
+- Additional organization creation requires a valid org-creation invite token
 - When a user attempts signup without a token, they see an error asking them to request an invite
-- Admin users can issue org-creation invites (see Settings → Org Management)
 - Each organization is fully isolated by `org_id`
+
+**Platform admins:** Only users whose email is listed in `PLATFORM_ADMIN_EMAILS` (comma-separated, case-insensitive, e.g. `wrangler secret put PLATFORM_ADMIN_EMAILS` or a `[vars]` entry) can issue org-creation invites, via `POST /api/auth/invites` with `{ "kind": "org_creation" }`. Org admins cannot. The returned token is passed to `POST /api/setup` as `orgCreationToken`. If the variable is unset or empty, nobody can issue them, so no additional organizations can be created.
 
 **Security:**
 - Rate limiting: max 5 setup attempts per IP per hour
@@ -204,7 +205,7 @@ No database migration needed — the mode only controls the app's acceptance of 
 - [ ] Verify `CORS_ORIGIN` is set to your production frontend URL
 - [ ] Verify `GOOGLE_REDIRECT_BASE_URL` matches your Workers URL (registered in Google Cloud Console)
 - [ ] Set `JWT_SECRET` on the production worker: `wrangler secret put JWT_SECRET --name gestionale-server`
-- [ ] If using `invite_only` mode, ensure admin users can issue org-creation invites (Settings → Org Management)
+- [ ] If using `invite_only` mode, set `PLATFORM_ADMIN_EMAILS` to the accounts allowed to issue org-creation invites
 - [ ] Test org creation (if applicable):
   - Visit the setup wizard (should pre-fill email if Google OAuth was used)
   - Verify setup token is issued and required on POST

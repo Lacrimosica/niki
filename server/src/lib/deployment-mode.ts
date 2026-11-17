@@ -60,6 +60,19 @@ export function canCreateOrg(mode: DeploymentMode, orgCount: number, hasOrgCreat
 }
 
 /**
+ * Whether `email` is listed in PLATFORM_ADMIN_EMAILS (comma-separated, case-insensitive).
+ * Fails closed: an unset or empty list means nobody is a platform admin.
+ */
+export function isPlatformAdmin(rawList: string | undefined, email: string | null | undefined): boolean {
+  const target = email?.trim().toLowerCase();
+  if (!rawList || !target) return false;
+  return rawList
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .some((entry) => entry.length > 0 && entry === target);
+}
+
+/**
  * Get a user-friendly description of what the deployment mode allows.
  */
 export function getDeploymentModeDescription(mode: DeploymentMode): string {
