@@ -1,10 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { jwt } from 'hono/jwt';
-import { drizzle } from 'drizzle-orm/d1';
-import { eq, and } from 'drizzle-orm';
-import { organizationUser } from './db/schema';
-import { sessionPermissions } from './lib/session-permissions';
+import { isSessionPayload, loadSession } from './lib/session-token';
 import { peopleRouter } from './routes/people';
 import periodsRouter from './routes/periods';
 import { assembliesRouter } from './routes/assemblies';
@@ -148,37 +145,19 @@ app.use('/api/*', async (c, next) => {
   const isPublic = isPublicApiPath(path);
   if (isPublic) return next();
 
-  const payload = c.get('jwtPayload') as {
-    sub: string;
-    orgId: string;
-    role: string;
-    permissions: string[];
-    exp: number;
-  } | undefined;
-
-  if (!payload?.sub || !payload?.orgId) {
+  // The jwt middleware only checks signature and expiry; every JWT type shares
+  // JWT_SECRET, so require the session type and an unrevoked token_version here.
+  const payload: unknown = c.get('jwtPayload');
+  if (!isSessionPayload(payload)) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
 
-  const db = drizzle(c.env.DB);
-  const membership = await db
-    .select({ id: organizationUser.id, role: organizationUser.role, permissions: organizationUser.permissions })
-    .from(organizationUser)
-    .where(
-      and(
-        eq(organizationUser.userId, payload.sub),
-        eq(organizationUser.orgId, payload.orgId),
-      ),
-    )
-    .get();
-
-  if (!membership) {
-    return c.json({ error: 'Session invalid: user or organization no longer exists' }, 401);
+  const session = await loadSession(c.env.DB, payload);
+  if (!session) {
+    return c.json({ error: 'Session invalid or revoked' }, 401);
   }
 
-  // Role and permissions can change after the token was issued (e.g. a demotion);
-  // handlers must see the current values, not the ones frozen into the JWT.
-  c.set('jwtPayload', { ...payload, role: membership.role, permissions: sessionPermissions(membership) });
+  c.set('jwtPayload', session);
 
   return next();
 });

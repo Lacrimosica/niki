@@ -50,6 +50,8 @@ describe('Tenant isolation over HTTP', () => {
         orgId,
         role,
         permissions,
+        typ: 'session',
+        tv: 0,
         exp: Math.floor(Date.now() / 1000) + 3600,
       },
       JWT_SECRET,
