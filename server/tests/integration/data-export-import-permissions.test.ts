@@ -33,7 +33,7 @@ describe('Export/import permissions and audit', () => {
     const user = await createTestUser({ email: 'someone@org1.local' });
     await createTestOrganizationUser(user.id, org.id, { role, permissions: JSON.stringify(permissions) });
     const token = await sign(
-      { sub: user.id, email: user.email, orgId: org.id, role, permissions, exp: Math.floor(Date.now() / 1000) + 3600 },
+      { sub: user.id, email: user.email, orgId: org.id, role, permissions, typ: 'session', tv: 0, exp: Math.floor(Date.now() / 1000) + 3600 },
       JWT_SECRET,
     );
     return { org, user, token };

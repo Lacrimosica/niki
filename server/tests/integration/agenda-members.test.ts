@@ -53,7 +53,7 @@ describe('Convocation agenda members', () => {
       .where(and(eq(schema.organizationUser.userId, userId), eq(schema.organizationUser.orgId, orgId)))
       .run();
     return sign(
-      { sub: userId, email: `${userId}@test.local`, orgId, role: 'core_admin', permissions: PERMISSIONS, exp: Math.floor(Date.now() / 1000) + 3600 },
+      { sub: userId, email: `${userId}@test.local`, orgId, role: 'core_admin', permissions: PERMISSIONS, typ: 'session', tv: 0, exp: Math.floor(Date.now() / 1000) + 3600 },
       JWT_SECRET,
     );
   }

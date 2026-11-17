@@ -219,7 +219,8 @@ describe('Invite Token Validation — invite_only Mode', () => {
     async function seedFirstOrgWithInvite(overrides: Parameters<typeof createTestInvite>[2] = {}) {
       const org = await createTestOrganization({ slug: 'first-org', name: 'First Organization' });
       const issuer = await createTestUser({ email: 'issuer@example.com' });
-      return createTestInvite(org.id, issuer.id, overrides);
+      // Only org-creation invites may be used to create an organization.
+      return createTestInvite(org.id, issuer.id, { kind: 'org_creation', email: null, ...overrides });
     }
 
     it('requires a token once an organization exists', async () => {

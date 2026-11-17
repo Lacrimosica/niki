@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { sign } from 'hono/jwt';
 import app from '../../src/index';
+import { startGoogleLogin } from '../setup/http';
 import {
   initializeMiniflare,
   cleanupMiniflare,
@@ -55,18 +56,19 @@ describe('Google login does not change membership role', () => {
       ),
     ));
 
-    const state = await sign({ type: 'login', exp: Math.floor(Date.now() / 1000) + 600 }, JWT_SECRET);
+    const googleEnv = {
+      DB: getMiniflareRawDB(),
+      JWT_SECRET,
+      GOOGLE_CLIENT_ID: 'id',
+      GOOGLE_CLIENT_SECRET: 'secret',
+      GOOGLE_REDIRECT_BASE_URL: 'http://localhost:8787',
+      APP_URL: 'http://localhost:5173',
+    };
+    const { state, cookie } = await startGoogleLogin(googleEnv);
     const res = await app.request(
       `/api/auth/google/callback?code=abc&state=${encodeURIComponent(state)}`,
-      {},
-      {
-        DB: getMiniflareRawDB(),
-        JWT_SECRET,
-        GOOGLE_CLIENT_ID: 'id',
-        GOOGLE_CLIENT_SECRET: 'secret',
-        GOOGLE_REDIRECT_BASE_URL: 'http://localhost:8787',
-        APP_URL: 'http://localhost:5173',
-      },
+      { headers: { Cookie: cookie } },
+      googleEnv,
     );
 
     expect(res.status).toBe(302);
@@ -80,7 +82,7 @@ describe('Google login does not change membership role', () => {
     expect(row?.role).toBe('viewer');
     expect(JSON.parse(row?.permissions ?? '[]')).toEqual(['dashboard.view']);
 
-    const user_ = new URL(location).searchParams.get('user');
+    const user_ = new URLSearchParams(new URL(location).hash.slice(1)).get('user');
     expect(JSON.parse(user_ ?? '{}').role).toBe('viewer');
   });
 });

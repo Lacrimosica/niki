@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { sign } from 'hono/jwt';
 import app from '../../src/index';
+import { startGoogleLogin } from '../setup/http';
 import {
   initializeMiniflare,
   cleanupMiniflare,
@@ -55,7 +56,7 @@ describe('Invite kinds and atomic redemption', () => {
       .where(and(eq(schema.organizationUser.userId, userId), eq(schema.organizationUser.orgId, orgId)))
       .run();
     return sign(
-      { sub: userId, email: `${userId}@test.local`, orgId, role, permissions: [], exp: Math.floor(Date.now() / 1000) + 3600 },
+      { sub: userId, email: `${userId}@test.local`, orgId, role, permissions: [], typ: 'session', tv: 0, exp: Math.floor(Date.now() / 1000) + 3600 },
       JWT_SECRET,
     );
   }
@@ -106,10 +107,10 @@ describe('Invite kinds and atomic redemption', () => {
   }
 
   async function googleCallback(code: string, inviteToken: string) {
-    const state = await sign({ type: 'login', inviteToken, exp: Math.floor(Date.now() / 1000) + 600 }, JWT_SECRET);
+    const { state, cookie } = await startGoogleLogin(env(), inviteToken);
     const res = await app.request(
       `/api/auth/google/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
-      {},
+      { headers: { Cookie: cookie } },
       env(),
     );
     return res.headers.get('Location') ?? '';
@@ -209,7 +210,7 @@ describe('Invite kinds and atomic redemption', () => {
       const { org, admin } = await seedOrgWithAdmin('core_admin');
       await mintToken(admin.id, org.id, 'core_admin');
       const forged = await sign(
-        { sub: admin.id, email: 'platform@ops.local', orgId: org.id, role: 'core_admin', permissions: [], exp: Math.floor(Date.now() / 1000) + 3600 },
+        { sub: admin.id, email: 'platform@ops.local', orgId: org.id, role: 'core_admin', permissions: [], typ: 'session', tv: 0, exp: Math.floor(Date.now() / 1000) + 3600 },
         JWT_SECRET,
       );
 

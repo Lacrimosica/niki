@@ -39,6 +39,8 @@ export async function mintSessionToken(
       orgId,
       role,
       permissions,
+      typ: 'session', // the session middleware rejects tokens without typ/tv
+      tv: 0,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     TEST_JWT_SECRET,
@@ -63,4 +65,22 @@ export async function callApi(
     { method, headers, body: body === undefined ? undefined : JSON.stringify(body) },
     testEnv(mode),
   );
+}
+
+/**
+ * Start the Google login flow the way a browser does and return the state plus
+ * the nonce cookie the callback requires (OAuth state is bound to the browser).
+ */
+export async function startGoogleLogin(
+  env: Record<string, unknown>,
+  inviteToken?: string,
+): Promise<{ state: string; cookie: string }> {
+  const query = inviteToken ? `?inviteToken=${encodeURIComponent(inviteToken)}` : '';
+  const res = await app.request(`/api/auth/google${query}`, {}, env);
+  const location = res.headers.get('location');
+  if (!location) throw new Error(`Google login start did not redirect (status ${res.status})`);
+  const state = new URL(location).searchParams.get('state') ?? '';
+  const nonce = (res.headers.get('set-cookie') ?? '').match(/oauth_nonce_login=([^;]+)/)?.[1];
+  if (!state || !nonce) throw new Error('Google login start returned no state or nonce cookie');
+  return { state, cookie: `oauth_nonce_login=${nonce}` };
 }
