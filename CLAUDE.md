@@ -61,7 +61,7 @@ Key features:
 - Strict mode enabled
 - Use `const` by default; `let` only when reassignment is needed
 - Prefer named exports over default
-- Avoid `any`; use `unknown` + type guards or generics
+- Never write `any`. See "Lint Rules" below for the replacements
 - Comment why, not what (identifiers should say what)
 
 ### Database / Drizzle ORM
@@ -77,6 +77,33 @@ Key features:
 - No prop drilling; consider context or state management for deep nesting
 - Keep components under 400 lines; extract sub-components for clarity
 - File naming: `ComponentName.tsx` for components, `useHookName.tsx` for hooks
+- A `.tsx` file that exports a component exports only components. Put contexts, hooks, constants and helpers in a `.ts` file (see "Lint Rules")
+
+### Lint Rules
+
+The client is linted with ESLint (`client/eslint.config.js`: `eslint:recommended`, `typescript-eslint` recommended, React hooks, react-refresh). Every change must leave **zero lint errors**. Warnings are allowed but do not add new ones.
+
+The pre-commit hook runs `eslint --fix` on staged client files and then the typecheck. A commit that adds errors, or touches a file that already has them, is blocked. Generated code must therefore pass these rules the first time:
+
+1. **No `any`** (`@typescript-eslint/no-explicit-any`). Use the types that already exist: `client/src/types/assembly.ts`, `types/delete-request.ts`, and the exported interfaces in `hooks/` (`useCompliance.ts`, `usePeriods.ts`, `usePerson.ts`, `useSettings.ts`, `useDocuments.ts`). If none fits, define one next to its usage. For request bodies use `Record<string, unknown>` or a named payload type. For values of unknown shape use `unknown` and narrow it with `typeof` or `in` checks. Do not cast to `any` to get past a type. Casting a select's string value to the union it can hold (`e.target.value as Foo['mode']`) is fine.
+2. **Caught errors are `unknown`.** Write `catch (err: unknown)`, or `catch {` when the error is not used. Read API messages with `apiErrorMessage(err)` and fall back with `errorMessage(err)`, both from `src/lib/api-error.ts`. Do not read `err.response.data` directly. Those helpers return `undefined` for values that are not API errors, so always provide a fallback.
+3. **No unused variables or imports** (`@typescript-eslint/no-unused-vars`). Delete them. Do not prefix with `_` to silence the rule.
+4. **Component files export only components** (`react-refresh/only-export-components`). Contexts, hooks, constants and plain functions go in a `.ts` file next to the component, for example `hooks/auth-context.ts`, `hooks/branding-context.ts`, `hooks/theme-context.ts` and `components/compliance/compliance-forms.ts`. Exporting types is fine.
+5. **No synchronous `setState` in an effect** (`react-hooks/set-state-in-effect`). Derive the value during render instead. If state must follow a prop, adjust it during render with a tracked copy of the previous value. Set state in event handlers where possible. For fetch-on-open, use a `useRef` guard that stops the effect requesting twice, store a `settled` flag inside the `.then`/`.finally`, and derive `loading` from `wanted && !settled`. `setState` inside a promise callback is fine.
+6. **Declare a function before any effect that calls it** (`react-hooks/immutability`), for example `logout` before the effect that registers an interceptor which calls it.
+7. **No try/catch that only rethrows** (`no-useless-catch`).
+8. **Keep effect dependencies complete** (`react-hooks/exhaustive-deps`, a warning). If a dependency should not retrigger the effect, restructure the code rather than leaving the list incomplete.
+9. **No `eslint-disable` comments.** If one seems necessary, fix the structure instead, or ask first.
+
+**Before you finish a change:**
+```bash
+npx eslint <each changed .ts/.tsx file>   # must show 0 errors
+npm run typecheck -w client               # tsc on tsconfig.app.json and tsconfig.node.json
+npm run build -w client
+```
+`npm run lint -w client` lints everything, so use it when you need the full state. Do not run a bare `npx tsc --noEmit` in `client/`: `client/tsconfig.json` is only a references stub and that command checks nothing.
+
+If you change a file that already has lint errors, fix those errors in the same change. Do not leave them for later.
 
 ---
 
@@ -333,11 +360,15 @@ Browser: http://localhost:5173 (frontend proxies API to backend)
 ### Testing
 
 ```bash
-# Type checking
-npm run typecheck
+# Type checking (server and client; client checks tsconfig.app.json and tsconfig.node.json)
+npm run typecheck -w server
+npm run typecheck -w client
 
-# Unit/integration tests (if configured)
-npm test
+# Lint (client; must report 0 errors)
+npm run lint -w client
+
+# Server integration tests
+cd server && npx vitest run
 ```
 
 ---
@@ -424,8 +455,8 @@ Examples: `feat/multi-org-support`, `fix/google-auth-bug`, `chore/update-deps`
 
 ### "I'm getting a TypeScript error"
 
-1. Run `npm run typecheck` to see all errors
-2. Fix type mismatches (prefer explicit types over `any`)
+1. Run `npm run typecheck -w client` (or `-w server`) to see all errors
+2. Fix type mismatches using the existing types (see "Lint Rules", rule 1). Never `any`
 3. Commit the fix separately from logic changes if helpful
 
 ### "I need to reset everything"

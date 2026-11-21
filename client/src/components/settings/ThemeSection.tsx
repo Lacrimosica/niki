@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useTheme } from '../../hooks/useTheme';
+import { useTheme } from '../../hooks/theme-context';
 import { PREDEFINED_THEMES, type ThemeVars } from '../../themes';
 
 export const ThemeSection = () => {
