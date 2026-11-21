@@ -25,6 +25,8 @@ import mfaRouter from './routes/mfa';
 type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
+  /** production | staging | demo; set per environment in wrangler.toml */
+  ENVIRONMENT?: string;
   CORS_ORIGIN?: string;
   DEPLOYMENT_MODE?: string;
   GOOGLE_CLIENT_ID?: string;
@@ -101,7 +103,8 @@ app.get('/health', (c) => {
   return c.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    environment: c.env.CORS_ORIGIN ? 'production' : 'development'
+    // Named per environment in wrangler.toml; the CORS fallback only covers local dev.
+    environment: c.env.ENVIRONMENT ?? (c.env.CORS_ORIGIN ? 'production' : 'development')
   });
 });
 
