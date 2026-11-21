@@ -1,5 +1,5 @@
 import { apiErrorMessage } from '../lib/api-error';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { useTranslation } from 'react-i18next';
 
@@ -53,7 +53,7 @@ export const usePeople = (filter?: string) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchPeople = async () => {
+  const fetchPeople = useCallback(async () => {
     try {
       setLoading(true);
       const params = filter && filter !== 'all' ? `?filter=${encodeURIComponent(filter)}` : '';
@@ -66,7 +66,7 @@ export const usePeople = (filter?: string) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [filter, t]);
 
   const addPerson = async (data: Partial<Person>) => {
     try {
@@ -80,7 +80,7 @@ export const usePeople = (filter?: string) => {
 
   useEffect(() => {
     fetchPeople();
-  }, [filter]);
+  }, [fetchPeople]);
 
   return { people, loading, error, refresh: fetchPeople, addPerson };
 };

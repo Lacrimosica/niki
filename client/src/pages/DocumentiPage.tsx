@@ -30,7 +30,7 @@ const DocumentiPage = () => {
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [yearFilter, setYearFilter] = useState<string>('');
 
-  useEffect(() => { loadHistory(); }, []);
+  useEffect(() => { loadHistory(); }, [loadHistory]);
 
   const years = useMemo(() => {
     const set = new Set(history.map((r) => new Date(r.createdAt).getFullYear()));

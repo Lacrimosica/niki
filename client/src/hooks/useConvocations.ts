@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
 import { API_BASE_URL } from '../config';
@@ -21,7 +21,7 @@ export const useConvocations = (assemblyId?: string) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchList = async () => {
+  const fetchList = useCallback(async () => {
     try {
       setLoading(true);
       const url = assemblyId
@@ -36,11 +36,11 @@ export const useConvocations = (assemblyId?: string) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [assemblyId]);
 
   useEffect(() => {
     fetchList();
-  }, [assemblyId]);
+  }, [fetchList]);
 
   const create = async (data: Partial<Convocation>) => {
     const res = await axios.post<Convocation>(`${API_BASE_URL}/convocations`, {

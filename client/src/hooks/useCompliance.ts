@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 
 import { API_BASE_URL } from '../config';
@@ -124,35 +124,35 @@ export const useCompliance = (personId?: string, enabled = true) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchRules = async () => {
+  const fetchRules = useCallback(async () => {
     const response = await axios.get(`${API_BASE_URL}/compliance/rules`);
     setRules(response.data);
     return response.data;
-  };
+  }, []);
 
-  const fetchPersonCompliance = async () => {
+  const fetchPersonCompliance = useCallback(async () => {
     if (!personId) return null;
     const response = await axios.get(`${API_BASE_URL}/compliance/person/${personId}`);
     setPersonData(response.data);
     return response.data as CompliancePersonData;
-  };
+  }, [personId]);
 
-  const fetchSummary = async () => {
+  const fetchSummary = useCallback(async () => {
     const response = await axios.get(`${API_BASE_URL}/compliance/summary`);
     setSummary(response.data);
     return response.data;
-  };
+  }, []);
 
-  const fetchAlerts = async (includeSuppressed = true) => {
+  const fetchAlerts = useCallback(async (includeSuppressed = true) => {
     const response = await axios.get(`${API_BASE_URL}/compliance/alerts`, {
       params: { includeSuppressed },
     });
     setAlerts(response.data.alerts);
     setSuppressedAlerts(response.data.suppressed);
     return response.data;
-  };
+  }, []);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -164,12 +164,12 @@ export const useCompliance = (personId?: string, enabled = true) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [personId, fetchRules, fetchSummary, fetchAlerts, fetchPersonCompliance]);
 
   useEffect(() => {
     if (!enabled) return;
     refresh();
-  }, [personId, enabled]);
+  }, [refresh, enabled]);
 
   const createRole = async (data: Record<string, unknown>) => {
     await axios.post(`${API_BASE_URL}/compliance/roles`, data);
