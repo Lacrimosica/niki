@@ -68,8 +68,10 @@ node_modules/
 ehthumbs.db
 Thumbs.db
 
-# Local Claude Code settings
-.claude/
+# Local Claude Code settings (shared settings and hooks are tracked)
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 
 # Planning and development docs
 .plans/
