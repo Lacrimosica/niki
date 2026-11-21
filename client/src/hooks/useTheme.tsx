@@ -1,18 +1,9 @@
-import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react';
+import { useEffect, useState, useCallback, type ReactNode } from 'react';
 import axios from 'axios';
 import { resolveTheme, applyTheme, clearThemeVars, PREDEFINED_THEMES, type ThemeVars } from '../themes';
 import { useAuth } from './auth-context';
+import { ThemeContext } from './theme-context';
 import { API_BASE_URL } from '../config';
-
-interface ThemeContextType {
-  themeKey: string;
-  themeVars: ThemeVars | null;
-  loading: boolean;
-  setTheme: (themeKeyOrJson: string) => Promise<void>;
-  isPreset: boolean;
-}
-
-const ThemeContext = createContext<ThemeContextType | null>(null);
 
 const DEFAULT_THEME_KEY = 'niki-light';
 
@@ -69,11 +60,4 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
       {children}
     </ThemeContext.Provider>
   );
-};
-
-// eslint-disable-next-line react-refresh/only-export-components -- the provider and its hook belong together
-export const useTheme = () => {
-  const ctx = useContext(ThemeContext);
-  if (!ctx) throw new Error('useTheme must be used within a ThemeProvider');
-  return ctx;
 };
