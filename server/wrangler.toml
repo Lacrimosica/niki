@@ -49,6 +49,7 @@ enabled = true
 # Should NOT be committed to git (add to .gitignore).
 
 [env.production.vars]
+ENVIRONMENT = "production"
 CORS_ORIGIN = "https://niki.lacrimosica.com"
 GOOGLE_REDIRECT_BASE_URL = "https://gestionale-server.m-gdrzi77.workers.dev"
 APP_URL = "https://niki.lacrimosica.com"
@@ -73,6 +74,7 @@ simple = { limit = 10, period = 60 }
 # Should NOT be committed to git (add to .gitignore).
 
 [env.staging.vars]
+ENVIRONMENT = "staging"
 CORS_ORIGIN = "https://niki-staging.lacrimosica.com"
 GOOGLE_REDIRECT_BASE_URL = "https://gestionale-server-staging.m-gdrzi77.workers.dev"
 APP_URL = "https://niki-staging.lacrimosica.com"
@@ -98,6 +100,7 @@ simple = { limit = 10, period = 60 }
 # Should NOT be committed to git (add to .gitignore).
 
 [env.demo.vars]
+ENVIRONMENT = "demo"
 CORS_ORIGIN = "https://niki-demo.lacrimosica.com"
 GOOGLE_REDIRECT_BASE_URL = "https://gestionale-server-demo.m-gdrzi77.workers.dev"
 APP_URL = "https://niki-demo.lacrimosica.com"
