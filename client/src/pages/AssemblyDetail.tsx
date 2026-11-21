@@ -97,7 +97,7 @@ const AssemblyDetail = () => {
     if (data) {
       syncSecondCallDate(data.secondCallDate || '', data.secondCallTime || '');
     }
-  }, [data]);
+  }, [data, syncSecondCallDate]);
 
 
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
@@ -130,7 +130,7 @@ const RetentionPage = () => {
 
   const canEdit = hasPermission(PERMISSIONS.peopleEdit);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -141,7 +141,7 @@ const RetentionPage = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [t]);
 
   const handleRecompute = async () => {
     setRecomputing(true);
@@ -157,7 +157,7 @@ const RetentionPage = () => {
   };
 
   // Load on first render
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { loadData(); }, [loadData]);
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">

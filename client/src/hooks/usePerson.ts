@@ -1,5 +1,5 @@
 import { apiErrorMessage } from '../lib/api-error';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { useTranslation } from 'react-i18next';
 import type { Person } from './usePeople';
@@ -45,7 +45,7 @@ export const usePerson = (id: string) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchDetails = async () => {
+  const fetchDetails = useCallback(async () => {
     try {
       setLoading(true);
       const res = await axios.get(`${API_BASE_URL}/people/${id}`);
@@ -56,7 +56,7 @@ export const usePerson = (id: string) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id, t]);
 
   const updatePerson = async (data: Partial<PersonDetails>) => {
     try {
@@ -79,7 +79,7 @@ export const usePerson = (id: string) => {
 
   useEffect(() => {
     if (id) fetchDetails();
-  }, [id]);
+  }, [fetchDetails, id]);
 
   return { person, loading, error, refresh: fetchDetails, updatePerson, deletePerson };
 };

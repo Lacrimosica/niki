@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import type { Permission } from '../lib/permissions';
 
@@ -34,7 +34,7 @@ export const useSettingsUsers = (enabled: boolean) => {
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     if (!enabled) return;
     try {
       setLoading(true);
@@ -47,11 +47,11 @@ export const useSettingsUsers = (enabled: boolean) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [enabled]);
 
   useEffect(() => {
     refresh();
-  }, [enabled]);
+  }, [refresh]);
 
   const createUser = async (payload: CreateSettingsUserInput) => {
     const response = await axios.post<SettingsUser>(`${API_BASE_URL}/settings/users`, payload);
@@ -93,7 +93,7 @@ export const useAddresses = (enabled: boolean) => {
   const [addresses, setAddresses] = useState<organizationAddress[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     if (!enabled) return;
     try {
       setLoading(true);
@@ -102,11 +102,11 @@ export const useAddresses = (enabled: boolean) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [enabled]);
 
   useEffect(() => {
     refresh();
-  }, [enabled]);
+  }, [refresh]);
 
   const createAddress = async (payload: { address: string; effectiveFrom: string; notes?: string }) => {
     await axios.post(`${API_BASE_URL}/settings/addresses`, payload);
@@ -162,7 +162,7 @@ export const useDocumentSettings = (enabled: boolean) => {
   const [settings, setSettings] = useState<DocumentSettings | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     if (!enabled) return;
     try {
       setLoading(true);
@@ -171,9 +171,9 @@ export const useDocumentSettings = (enabled: boolean) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [enabled]);
 
-  useEffect(() => { refresh(); }, [enabled]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   const save = async (patch: Partial<DocumentSettings>) => {
     const res = await axios.patch<DocumentSettings>(`${API_BASE_URL}/settings/documents`, patch);
@@ -188,7 +188,7 @@ export const useModalityOptions = (enabled: boolean) => {
   const [options, setOptions] = useState<ModalityOption[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     if (!enabled) return;
     try {
       setLoading(true);
@@ -197,9 +197,9 @@ export const useModalityOptions = (enabled: boolean) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [enabled]);
 
-  useEffect(() => { refresh(); }, [enabled]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   const create = async (payload: { type: string; mode?: string; label: string; value: string; isDefault?: boolean }) => {
     await axios.post(`${API_BASE_URL}/settings/modality-options`, payload);
