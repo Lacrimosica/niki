@@ -325,7 +325,7 @@ assembliesRouter.delete('/:id', async (c) => {
 });
 
 assembliesRouter.get('/:id/member-links', async (c) => {
-  const denied = await requirePermission(c, 'members.view');
+  const denied = await requirePermission(c, 'people.view');
   if (denied) return denied;
 
   const id = c.req.param('id');
