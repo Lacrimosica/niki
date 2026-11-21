@@ -139,7 +139,7 @@ periodsRouter.get('/volunteers/active', async (c) => {
 // --- MEMBERS ---
 
 periodsRouter.get('/members/unlinked', async (c) => {
-  const denied = await requirePermission(c, 'members.view');
+  const denied = await requirePermission(c, 'people.view');
   if (denied) return denied;
 
   const { orgId } = c.get('jwtPayload');
